@@ -8,7 +8,11 @@ import '../data/sources/xtream_source.dart';
 
 /// Indirizzo del pannello Kairos (lo stesso di Kairos Pro, Kairos TV e Kairos Lite).
 /// Il pannello può indicarne uno nuovo (Impostazioni → server): l'app lo ricorda.
-const String kDefaultPanelUrl = 'https://kairos-panel.mariopiccolo8562.workers.dev';
+const String kDefaultPanelUrl = 'https://panel-kairos.com';
+
+/// Indirizzo di riserva: se il dominio non è raggiungibile (es. bloccato dalla rete)
+/// si prova questo, e l'app ricorda quello che funziona.
+const List<String> kFallbackPanelUrls = ['https://kairos-panel.mariopiccolo8562.workers.dev'];
 
 /// Errore del pannello con un messaggio già pronto per l'utente.
 class PanelException implements Exception {
@@ -229,12 +233,25 @@ class PanelState {
 
 /// API del pannello per i dispositivi (/api/player/…), le stesse delle altre app Kairos.
 class PanelClient {
-  PanelClient({required this.identity, required this.server, required this.model, required this.version});
+  PanelClient({
+    required this.identity,
+    required this.server,
+    required this.model,
+    required this.version,
+    this.fallbacks = const <String>[],
+    this.onServerChanged,
+  });
 
   final PanelIdentity identity;
   String server;
   final String model;
   final String version;
+
+  /// Indirizzi di riserva provati quando il server attuale non risponde.
+  final List<String> fallbacks;
+
+  /// Chiamato quando l'app passa a un altro indirizzo che funziona.
+  final void Function(String server)? onServerChanged;
 
   /// Versione mostrata nel pannello (Utenti online): «plus 0.1.7».
   String get ver {
@@ -242,19 +259,49 @@ class PanelClient {
     return v.length > 20 ? v.substring(0, 20) : v;
   }
 
-  String get _base => server.endsWith('/') ? server.substring(0, server.length - 1) : server;
+  String get _base => _trim(server);
+
+  static String _trim(String url) => url.endsWith('/') ? url.substring(0, url.length - 1) : url;
 
   Map<String, Object?> _auth() => {'code': identity.code, 'secret': identity.secret};
 
-  Future<JsonResponse> _post(String path, Map<String, Object?> body, {Duration timeout = const Duration(seconds: 20)}) async {
+  Future<JsonResponse> _post(
+    String path,
+    Map<String, Object?> body, {
+    Duration timeout = const Duration(seconds: 20),
+    bool useFallbacks = true,
+  }) async {
     if (_base.isEmpty) throw const PanelException('Server non configurato');
-    try {
-      return await postJson(Uri.parse('$_base$path'), body, timeout: timeout);
-    } on SourceException catch (e) {
-      throw PanelException(e.message);
-    } on FormatException {
-      throw const PanelException('Indirizzo del server non valido');
+    final servers = <String>[
+      server,
+      if (useFallbacks)
+        for (final f in fallbacks)
+          if (_trim(f) != _base) f,
+    ];
+    PanelException? lastError;
+    JsonResponse? lastPage;
+    for (final candidate in servers) {
+      try {
+        final r = await postJson(Uri.parse('${_trim(candidate)}$path'), body, timeout: timeout);
+        // una pagina che non è del pannello (rete che blocca il dominio, protezioni): si prova il prossimo
+        if (r.body == null) {
+          lastPage = r;
+          continue;
+        }
+        if (_trim(candidate) != _base) {
+          // il server di prima non risponde, questo sì: da ora si usa lui
+          server = _trim(candidate);
+          onServerChanged?.call(server);
+        }
+        return r;
+      } on SourceException catch (e) {
+        lastError = PanelException(e.message);
+      } on FormatException {
+        lastError = const PanelException('Indirizzo del server non valido');
+      }
     }
+    if (lastPage != null) return lastPage;
+    throw lastError ?? const PanelException('Impossibile raggiungere il server');
   }
 
   Future<PanelState> register() async {
@@ -331,6 +378,7 @@ class PanelClient {
         '/api/player/stream',
         {..._auth(), 'state': state, 'title': title},
         timeout: const Duration(milliseconds: 2500),
+        useFallbacks: false,
       );
       final j = r.body;
       if (j == null) return null;

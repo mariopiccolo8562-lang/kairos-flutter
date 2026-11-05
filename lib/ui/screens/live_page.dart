@@ -91,7 +91,11 @@ class _LivePageState extends State<LivePage> {
 
   void _focusChannels() {
     final list = _channelsKey.currentState;
-    if (list != null) list.focusRemembered();
+    if (list != null) {
+      list.focusRemembered();
+    } else {
+      _focusCategories(); // categoria senza canali
+    }
   }
 
   void _focusCategories() => _categoriesKey.currentState?.focusSelected();
@@ -167,7 +171,7 @@ class _LivePageState extends State<LivePage> {
                           SizedBox(
                             width: 190,
                             child: _column(
-                              onRight: _focusChannels,
+                              onRight: () => _channelsKey.currentState?.focusRemembered(),
                               child: _CategoryList(
                                 key: _categoriesKey,
                                 categories: categories,

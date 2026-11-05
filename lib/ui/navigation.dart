@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../app/app_scope.dart';
 import '../app/brand.dart';
@@ -83,34 +84,50 @@ Future<bool> showTvConfirm(
   return result ?? false;
 }
 
-/// Messaggio con un solo pulsante. Il testo lungo scorre con le frecce.
+/// Messaggio con un solo pulsante. Il testo lungo scorre con ▲▼.
 Future<void> showTvMessage(
   BuildContext context, {
   required String title,
   required String message,
   String button = 'Ok',
 }) {
+  final scroll = ScrollController();
   return showDialog<void>(
     context: context,
     builder: (context) => _dialogFrame(
       width: 480,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(title, style: AppText.title),
-          const SizedBox(height: 10),
-          Flexible(
-            child: SingleChildScrollView(
-              child: Text(message, style: AppText.body),
+      child: Focus(
+        canRequestFocus: false,
+        skipTraversal: true,
+        onKeyEvent: (node, event) {
+          if (event is! KeyDownEvent && event is! KeyRepeatEvent) return KeyEventResult.ignored;
+          final down = event.logicalKey == LogicalKeyboardKey.arrowDown;
+          final up = event.logicalKey == LogicalKeyboardKey.arrowUp;
+          if ((!down && !up) || !scroll.hasClients) return KeyEventResult.ignored;
+          final pos = scroll.position;
+          final target = (pos.pixels + (down ? 80 : -80)).clamp(0.0, pos.maxScrollExtent).toDouble();
+          scroll.animateTo(target, duration: const Duration(milliseconds: 140), curve: Curves.easeOut);
+          return KeyEventResult.handled;
+        },
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: AppText.title),
+            const SizedBox(height: 10),
+            Flexible(
+              child: SingleChildScrollView(
+                controller: scroll,
+                child: Text(message, style: AppText.body),
+              ),
             ),
-          ),
-          const SizedBox(height: 20),
-          Align(
-            alignment: Alignment.centerRight,
-            child: TvButton(label: button, autofocus: true, onPressed: () => Navigator.of(context).pop()),
-          ),
-        ],
+            const SizedBox(height: 20),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TvButton(label: button, autofocus: true, onPressed: () => Navigator.of(context).pop()),
+            ),
+          ],
+        ),
       ),
     ),
   );

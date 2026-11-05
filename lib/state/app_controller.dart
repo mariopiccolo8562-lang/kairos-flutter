@@ -136,6 +136,8 @@ class AppController {
       server: saved != null && saved.startsWith('https://') ? saved : kDefaultPanelUrl,
       model: device.model,
       version: appVersion,
+      fallbacks: [kDefaultPanelUrl, ...kFallbackPanelUrls],
+      onServerChanged: (url) => unawaited(_store.saveServer(url)),
     );
 
     _playerSub = NativeBridge.playerEvents.listen(_onPlayerEvent);
