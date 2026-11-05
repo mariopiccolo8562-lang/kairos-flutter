@@ -12,3 +12,6 @@ GeneratedPluginRegistrant.java
 key.properties
 **/*.keystore
 **/*.jks
+
+# Chiave di ANTEPRIMA (non quella definitiva): serve a firmare sempre allo stesso modo
+!keys/preview.jks

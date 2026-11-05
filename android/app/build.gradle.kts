@@ -29,10 +29,21 @@ android {
         versionName = flutter.versionName
     }
 
+    // Chiave di firma di ANTEPRIMA, uguale a ogni compilazione: così ogni nuova
+    // versione scaricata dallo store si installa sopra la precedente.
+    // Prima della distribuzione ai clienti va sostituita con la chiave definitiva
+    // (custodita nei segreti di GitHub, non nel repository).
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("../keys/preview.jks")
+            storePassword = "kairos-preview"
+            keyAlias = "preview"
+            keyPassword = "kairos-preview"
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
             signingConfig = signingConfigs.getByName("debug")
         }
     }

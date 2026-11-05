@@ -32,5 +32,25 @@ flutter test
 flutter build apk --release
 ```
 
-Ogni push su `main` compila l'APK con GitHub Actions: lo trovi nella scheda
-**Actions**, nell'esecuzione più recente, alla voce *Artifacts*.
+## Pubblicazione nel Kairos Store
+
+Ogni push su `main` compila l'APK con GitHub Actions e lo pubblica nelle
+release del repository pubblico **kairos-store** (il codice resta privato qui),
+con un link fisso usato dallo store:
+
+```
+https://github.com/mariopiccolo8562-lang/kairos-store/releases/download/kairos-flutter/kairos-flutter.apk
+```
+
+- La release è una *pre-release* e non diventa mai "l'ultima" di kairos-store,
+  perché l'app Kairos Store usa l'ultima release per aggiornare sé stessa.
+- Serve il segreto **`STORE_TOKEN`** in questo repository: un token GitHub
+  *fine-grained* con accesso **solo a kairos-store**, permesso *Contents: Read and write*.
+- La versione è `0.1.N`, con N che cresce a ogni compilazione.
+
+## Firma
+
+L'APK è firmato con la chiave di **anteprima** `android/keys/preview.jks`, sempre la
+stessa, così gli aggiornamenti si installano sopra la versione precedente.
+Prima della distribuzione ai clienti va sostituita con una chiave definitiva
+custodita nei segreti di GitHub (non nel repository).

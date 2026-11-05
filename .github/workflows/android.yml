@@ -3,12 +3,17 @@ name: APK Android
 on:
   push:
     branches: [main]
-  pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      # Token con permesso di scrittura SOLO su kairos-store (segreto del repository).
+      STORE_TOKEN: ${{ secrets.STORE_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -32,10 +37,41 @@ jobs:
       - name: Test
         run: flutter test
 
+      # Versione 0.1.N: N cresce a ogni compilazione, così lo store
+      # riconosce sempre la versione più recente.
       - name: Compilazione APK
-        run: flutter build apk --release
+        run: |
+          flutter build apk --release \
+            --build-name=0.1.${{ github.run_number }} \
+            --build-number=${{ github.run_number }}
+          cp build/app/outputs/flutter-apk/app-release.apk kairos-flutter.apk
 
       - uses: actions/upload-artifact@v4
         with:
-          name: apk
-          path: build/app/outputs/flutter-apk/app-release.apk
+          name: kairos-flutter-apk
+          path: kairos-flutter.apk
+
+      # Pubblica l'APK nelle release di kairos-store con un link fisso:
+      # https://github.com/mariopiccolo8562-lang/kairos-store/releases/download/kairos-flutter/kairos-flutter.apk
+      # È una pre-release e non diventa mai "l'ultima": l'app Kairos Store usa
+      # l'ultima release di kairos-store per aggiornare sé stessa.
+      - name: Pubblica nel Kairos Store
+        if: ${{ env.STORE_TOKEN != '' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: mariopiccolo8562-lang/kairos-store
+          token: ${{ secrets.STORE_TOKEN }}
+          target_commitish: main
+          tag_name: kairos-flutter
+          name: Kairos Flutter (anteprima)
+          body: |
+            Anteprima dell'app Kairos in Flutter per Fire TV e Android TV.
+            Versione 0.1.${{ github.run_number }}, aggiornata automaticamente a ogni modifica.
+          files: kairos-flutter.apk
+          prerelease: true
+          make_latest: false
+          overwrite_files: true
+
+      - name: Avviso token mancante
+        if: ${{ env.STORE_TOKEN == '' }}
+        run: echo "::warning::Segreto STORE_TOKEN assente, l'APK non è stato pubblicato nel Kairos Store."
