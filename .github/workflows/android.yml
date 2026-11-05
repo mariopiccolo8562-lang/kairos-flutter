@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write # serve per la release interna dell'APK
 
 jobs:
   build:
@@ -50,6 +50,16 @@ jobs:
         with:
           name: kairos-flutter-apk
           path: kairos-flutter.apk
+
+      # Release in questo repository (privato): ogni versione resta archiviata
+      # e l'APK si può copiare nel Kairos Store anche senza STORE_TOKEN.
+      - name: Release interna
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v0.1.${{ github.run_number }}
+          name: Kairos Flutter 0.1.${{ github.run_number }}
+          files: kairos-flutter.apk
+          make_latest: true
 
       # Pubblica l'APK nelle release di kairos-store con un link fisso:
       # https://github.com/mariopiccolo8562-lang/kairos-store/releases/download/kairos-flutter/kairos-flutter.apk
