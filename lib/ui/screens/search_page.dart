@@ -9,7 +9,7 @@ import '../navigation.dart';
 import '../widgets/cards.dart';
 import '../widgets/content_row.dart';
 import '../widgets/rows_view.dart';
-import '../widgets/tv_button.dart';
+import '../widgets/tv_text_field.dart';
 
 /// Ricerca su canali, film e serie. Gli indici di ricerca sono già pronti
 /// nel catalogo, quindi anche con decine di migliaia di titoli è immediata.
@@ -49,15 +49,18 @@ class _SearchPageState extends State<SearchPage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: Layout.pagePadding),
-            child: TextField(
+            padding: const EdgeInsets.only(left: Layout.pagePadding, right: Layout.pageRight),
+            child: TvTextField(
               focusNode: widget.entryNode,
               controller: _text,
               textInputAction: TextInputAction.search,
               onChanged: _onChanged,
-              onSubmitted: (value) => setState(() => _term = value.trim()),
-              style: const TextStyle(fontSize: 18),
-              decoration: tvInputDecoration(hint: 'Cerca film, serie e canali', icon: Icons.search_rounded),
+              onSubmitted: (value) {
+                _debounce.cancel();
+                setState(() => _term = value.trim());
+              },
+              hint: 'Cerca film, serie e canali (premi OK per scrivere)',
+              icon: Icons.search_rounded,
             ),
           ),
           const SizedBox(height: 14),
@@ -73,7 +76,7 @@ class _SearchPageState extends State<SearchPage> {
     if (_term.length < 2) {
       return const Padding(
         padding: EdgeInsets.symmetric(horizontal: Layout.pagePadding),
-        child: Text('Scrivi almeno 2 lettere. Premi ▼ per passare ai risultati.', style: AppText.meta),
+        child: Text('Premi OK sul campo e scrivi almeno 2 lettere. Con ▼ passi ai risultati.', style: AppText.meta),
       );
     }
 
@@ -84,6 +87,7 @@ class _SearchPageState extends State<SearchPage> {
 
     if (channels.isNotEmpty) {
       rows.add(RowSpec(
+        id: 'canali',
         height: Layout.wideRowHeight,
         builder: (context, onRowFocused) => ContentRow(
           title: 'Canali (${channels.length})',
@@ -102,9 +106,10 @@ class _SearchPageState extends State<SearchPage> {
       ));
     }
 
-    void addPosters(String title, List<MediaItem> items) {
+    void addPosters(String id, String title, List<MediaItem> items) {
       if (items.isEmpty) return;
       rows.add(RowSpec(
+        id: id,
         height: Layout.posterRowHeight,
         builder: (context, onRowFocused) => ContentRow(
           title: '$title (${items.length})',
@@ -121,8 +126,8 @@ class _SearchPageState extends State<SearchPage> {
       ));
     }
 
-    addPosters('Film', movies);
-    addPosters('Serie TV', series);
+    addPosters('film', 'Film', movies);
+    addPosters('serie', 'Serie TV', series);
 
     if (rows.isEmpty) {
       return Padding(

@@ -1,16 +1,22 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../app/app_scope.dart';
 import '../../app/brand.dart';
 import '../../app/theme.dart';
 import '../../data/models.dart';
+import '../../state/app_controller.dart';
 import '../navigation.dart';
 import '../screens/browse_page.dart';
 import '../screens/home_page.dart';
 import '../screens/live_page.dart';
 import '../screens/search_page.dart';
 import '../screens/settings_page.dart';
+import '../widgets/brand_mark.dart';
 import '../widgets/tv_focusable.dart';
+import '../widgets/tv_text_field.dart';
 
 enum ShellTab { home, live, movies, series, search, settings }
 
@@ -36,6 +42,8 @@ extension on ShellTab {
 
 /// Struttura principale: barra laterale (si allarga quando ci entri, come su
 /// Netflix) e pagina della sezione scelta.
+///
+/// Uscendo dalla barra con ▶ si torna esattamente dove si era nella pagina.
 class MainShell extends StatefulWidget {
   const MainShell({super.key});
 
@@ -46,8 +54,12 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   ShellTab _tab = ShellTab.home;
   bool _railHasFocus = false;
+  FocusNode? _lastContent;
+  late final AppController _app;
+  bool _messagesOpen = false;
 
   final FocusNode _railArea = FocusNode(debugLabel: 'barra', canRequestFocus: false, skipTraversal: true);
+  final FocusNode _contentArea = FocusNode(debugLabel: 'contenuto', canRequestFocus: false, skipTraversal: true);
   final Map<ShellTab, FocusNode> _tabNodes = {
     for (final t in ShellTab.values) t: FocusNode(debugLabel: 'voce-${t.name}'),
   };
@@ -58,12 +70,24 @@ class _MainShellState extends State<MainShell> {
   @override
   void initState() {
     super.initState();
+    _app = AppScope.of(context);
+    FocusManager.instance.addListener(_onFocusChanged);
+    _app.notice.addListener(_onNotice);
+    _app.panelState.addListener(_onPanelState);
     _focusContent();
+    // avvisi del fornitore non ancora letti
+    Timer(const Duration(milliseconds: 900), () {
+      if (mounted) _showUnseenMessages();
+    });
   }
 
   @override
   void dispose() {
+    FocusManager.instance.removeListener(_onFocusChanged);
+    _app.notice.removeListener(_onNotice);
+    _app.panelState.removeListener(_onPanelState);
     _railArea.dispose();
+    _contentArea.dispose();
     for (final node in _tabNodes.values) {
       node.dispose();
     }
@@ -73,18 +97,73 @@ class _MainShellState extends State<MainShell> {
     super.dispose();
   }
 
+  /// Ricorda l'ultimo elemento selezionato nella pagina.
+  void _onFocusChanged() {
+    final focused = FocusManager.instance.primaryFocus;
+    if (focused != null && focused != _contentArea && _contentArea.hasFocus) _lastContent = focused;
+  }
+
+  void _onNotice() {
+    final message = _app.notice.value;
+    if (message == null || !mounted) return;
+    _app.notice.value = null;
+    showTvMessage(context, title: 'Visione interrotta', message: message);
+  }
+
+  void _onPanelState() => _showUnseenMessages();
+
+  Future<void> _showUnseenMessages() async {
+    if (_messagesOpen || !mounted) return;
+    final unseen = _app.unseenMessages();
+    if (unseen.isEmpty) return;
+    _messagesOpen = true;
+    await _app.markMessagesSeen(unseen);
+    if (mounted) {
+      await showTvMessage(
+        context,
+        title: unseen.length == 1 && unseen.first.title.isNotEmpty ? unseen.first.title : 'Messaggio del fornitore',
+        message: unseen
+            .map((m) => unseen.length == 1 || m.title.isEmpty ? m.body : '${m.title}\n${m.body}')
+            .join('\n\n'),
+      );
+    }
+    _messagesOpen = false;
+  }
+
   void _select(ShellTab tab) {
-    if (tab != _tab) setState(() => _tab = tab);
+    if (tab != _tab) {
+      setState(() {
+        _tab = tab;
+        _lastContent = null;
+      });
+    }
     _focusContent();
   }
 
   /// Dopo aver cambiato sezione il focus entra nel contenuto.
   void _focusContent() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final entry = _entryNodes[_tab]!;
-      if (entry.context != null) entry.requestFocus();
+      if (mounted) _enterContent(preferLast: false);
     });
+  }
+
+  /// Entra nella pagina: sull'ultimo elemento selezionato, altrimenti sul primo.
+  bool _enterContent({required bool preferLast}) {
+    final last = _lastContent;
+    if (preferLast && last != null && last.context != null && last.canRequestFocus) {
+      last.requestFocus();
+      return true;
+    }
+    final entry = _entryNodes[_tab]!;
+    if (entry.context != null) {
+      entry.requestFocus();
+      return true;
+    }
+    if (last != null && last.context != null && last.canRequestFocus) {
+      last.requestFocus();
+      return true;
+    }
+    return false;
   }
 
   void _onRailFocusChange(bool hasFocus) {
@@ -97,7 +176,19 @@ class _MainShellState extends State<MainShell> {
     }
   }
 
+  KeyEventResult _onRailKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+      _enterContent(preferLast: true);
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.arrowLeft) return KeyEventResult.handled;
+    return KeyEventResult.ignored;
+  }
+
   Future<void> _handleBack() async {
+    // mentre si scrive, Indietro chiude solo la scrittura
+    if (TvTextField.handleBack()) return;
     if (_railArea.hasFocus) {
       final exit = await showTvConfirm(
         context,
@@ -123,7 +214,10 @@ class _MainShellState extends State<MainShell> {
           children: [
             Positioned.fill(
               left: Layout.railWidth,
-              child: KeyedSubtree(key: ValueKey<ShellTab>(_tab), child: _page(_tab)),
+              child: Focus(
+                focusNode: _contentArea,
+                child: KeyedSubtree(key: ValueKey<ShellTab>(_tab), child: _page(_tab)),
+              ),
             ),
             Positioned(
               left: 0,
@@ -132,6 +226,7 @@ class _MainShellState extends State<MainShell> {
               child: Focus(
                 focusNode: _railArea,
                 onFocusChange: _onRailFocusChange,
+                onKeyEvent: _onRailKey,
                 child: _NavRail(
                   current: _tab,
                   expanded: _railHasFocus,
@@ -175,37 +270,35 @@ class _NavRail extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 180),
+      duration: const Duration(milliseconds: 160),
       curve: Curves.easeOutCubic,
       width: expanded ? Layout.railExpandedWidth : Layout.railWidth,
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: expanded
-              ? const [Color(0xF5000000), Color(0xE6000000), Color(0x00000000)]
-              : const [Color(0xB3000000), Color(0x66000000), Color(0x00000000)],
-          stops: const [0.0, 0.7, 1.0],
+              ? const [Color(0xFA07050C), Color(0xF007050C), Color(0x0007050C)]
+              : const [Color(0xCC07050C), Color(0x8807050C), Color(0x0007050C)],
+          stops: const [0.0, 0.72, 1.0],
         ),
       ),
       child: LayoutBuilder(
         builder: (context, constraints) {
           // Le etichette compaiono solo quando c'è spazio (anche durante l'animazione).
-          final showLabels = constraints.maxWidth > 120;
+          final showLabels = constraints.maxWidth > 150;
           return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const SizedBox(height: 26),
+              const SizedBox(height: 22),
               SizedBox(
-                height: 30,
-                child: Center(
-                  child: Text(
-                    showLabels ? Brand.appName.toUpperCase() : Brand.appName.substring(0, 1),
-                    maxLines: 1,
-                    softWrap: false,
-                    overflow: TextOverflow.clip,
-                    style: const TextStyle(
-                      color: Brand.accent,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 2,
+                height: 40,
+                child: Padding(
+                  padding: const EdgeInsets.only(left: 18),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: BrandMark(size: 36, showName: showLabels),
                     ),
                   ),
                 ),
@@ -254,8 +347,8 @@ class _RailItem extends StatelessWidget {
         final textColor = focused ? Colors.black : (selected ? Colors.white : const Color(0x99FFFFFF));
         return Container(
           height: 40,
-          margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-          padding: const EdgeInsets.symmetric(horizontal: 12),
+          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+          padding: const EdgeInsets.symmetric(horizontal: 14),
           decoration: BoxDecoration(
             color: focused ? Colors.white : Colors.transparent,
             borderRadius: BorderRadius.circular(8),
@@ -273,6 +366,7 @@ class _RailItem extends StatelessWidget {
                     overflow: TextOverflow.fade,
                     style: TextStyle(
                       fontSize: 14,
+                      height: 1.2,
                       fontWeight: selected || focused ? FontWeight.w700 : FontWeight.w500,
                       color: textColor,
                     ),

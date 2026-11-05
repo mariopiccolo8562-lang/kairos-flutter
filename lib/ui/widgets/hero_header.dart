@@ -62,110 +62,155 @@ class HeroData {
   String get id => item?.key ?? title;
 }
 
-/// Grande intestazione in stile Netflix: immagine sfumata a destra,
-/// titolo, dati e trama a sinistra. Cambia con una dissolvenza.
-class HeroHeader extends StatelessWidget {
+/// Intestazione in stile Netflix: titolo, dati e trama a sinistra, immagine
+/// sfumata a destra.
+///
+/// Pensata per le chiavette: il testo cambia subito, l'immagine grande arriva
+/// solo quando ti fermi su un titolo (e sulle chiavette con poca memoria non
+/// c'è proprio), la scheda completa del film si chiede dopo un attimo di pausa.
+class HeroHeader extends StatefulWidget {
   const HeroHeader({super.key, required this.data, this.height = Layout.heroHeight});
 
   final ValueListenable<HeroData?> data;
   final double height;
 
   @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: height,
-      child: RepaintBoundary(
-        child: ValueListenableBuilder<HeroData?>(
-          valueListenable: data,
-          builder: (context, value, child) => AnimatedSwitcher(
-            duration: const Duration(milliseconds: 260),
-            layoutBuilder: (current, previous) => Stack(
-              fit: StackFit.expand,
-              children: [...previous, ?current],
-            ),
-            child: value == null
-                ? const SizedBox.expand(key: ValueKey<String>('vuoto'))
-                : _HeroBody(key: ValueKey<String>(value.id), data: value),
-          ),
-        ),
-      ),
-    );
-  }
+  State<HeroHeader> createState() => _HeroHeaderState();
 }
 
-class _HeroBody extends StatefulWidget {
-  const _HeroBody({super.key, required this.data});
-
-  final HeroData data;
-
-  @override
-  State<_HeroBody> createState() => _HeroBodyState();
-}
-
-class _HeroBodyState extends State<_HeroBody> {
+class _HeroHeaderState extends State<HeroHeader> {
+  HeroData? _data;
+  String? _backdrop;
   MovieDetails? _details;
-  Timer? _timer;
+  Timer? _imageTimer;
+  Timer? _detailsTimer;
+  late final bool _lite = AppScope.of(context).lite;
 
   @override
   void initState() {
     super.initState();
-    final item = widget.data.item;
-    // I server Xtream non includono trama e sfondo nell'elenco dei film:
-    // li chiediamo solo se l'utente si ferma sul titolo per un attimo.
-    if (item != null && item.kind == MediaKind.movie && (item.plot == null || item.backdrop == null)) {
-      _timer = Timer(const Duration(milliseconds: 450), () async {
-        if (!mounted) return;
-        final details = await AppScope.of(context).movieDetails(item);
-        if (mounted && details != null) setState(() => _details = details);
-      });
+    widget.data.addListener(_onData);
+    _apply(widget.data.value, immediate: true);
+  }
+
+  @override
+  void didUpdateWidget(HeroHeader oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.data != widget.data) {
+      oldWidget.data.removeListener(_onData);
+      widget.data.addListener(_onData);
+      _apply(widget.data.value, immediate: true);
     }
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
+    widget.data.removeListener(_onData);
+    _imageTimer?.cancel();
+    _detailsTimer?.cancel();
     super.dispose();
+  }
+
+  void _onData() => _apply(widget.data.value);
+
+  void _apply(HeroData? data, {bool immediate = false}) {
+    _imageTimer?.cancel();
+    _detailsTimer?.cancel();
+    final changed = data?.id != _data?.id;
+    _data = data;
+    if (changed) {
+      _details = null;
+      _backdrop = null;
+    }
+    if (mounted && !immediate) setState(() {});
+    if (data == null) return;
+
+    // immagine grande: solo se ti fermi sul titolo
+    if (!_lite && !data.isLogo) {
+      final url = data.backdrop ?? data.image;
+      if (url != null) {
+        if (immediate) {
+          _backdrop = url;
+        } else {
+          _imageTimer = Timer(const Duration(milliseconds: 550), () {
+            if (mounted && _data?.id == data.id) setState(() => _backdrop = url);
+          });
+        }
+      }
+    }
+
+    // trama e sfondo dei film Xtream (non sono nell'elenco): dopo una pausa più lunga
+    final item = data.item;
+    if (item != null && item.kind == MediaKind.movie && (item.plot == null || item.backdrop == null)) {
+      _detailsTimer = Timer(const Duration(milliseconds: 900), () async {
+        if (!mounted) return;
+        final details = await AppScope.of(context).movieDetails(item);
+        if (!mounted || details == null || _data?.id != data.id) return;
+        setState(() {
+          _details = details;
+          if (!_lite && item.backdrop == null && details.backdrop != null) _backdrop = details.backdrop;
+        });
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final d = widget.data;
-    final details = _details;
-    final backdrop = d.isLogo ? null : (details?.backdrop ?? d.backdrop ?? details?.image ?? d.image);
-    final plot = d.plot ?? details?.plot;
-    final meta = d.meta;
+    final d = _data;
+    return SizedBox(
+      height: widget.height,
+      child: RepaintBoundary(
+        child: d == null ? const SizedBox.expand() : _body(d),
+      ),
+    );
+  }
 
+  Widget _body(HeroData d) {
+    final details = _details;
+    final plot = (d.plot != null && d.plot!.isNotEmpty) ? d.plot : details?.plot;
+    final meta = d.meta;
+    final backdrop = _backdrop;
     return Stack(
       fit: StackFit.expand,
       children: [
         if (d.isLogo && d.image != null)
           Positioned(
-            right: 56,
-            top: 24,
-            bottom: 40,
-            width: 240,
-            child: NetImage(url: d.image, title: d.title, fit: BoxFit.contain, decodeWidth: 240),
+            right: Layout.pageRight + 16,
+            top: 28,
+            bottom: 36,
+            width: 220,
+            child: NetImage(
+              key: ValueKey<String>('logo:${d.image}'),
+              url: d.image,
+              title: d.title,
+              fit: BoxFit.contain,
+              decodeWidth: 220,
+              transparentPlaceholder: true,
+              fallback: false,
+            ),
           )
         else if (backdrop != null)
           Positioned(
             right: 0,
             top: 0,
             bottom: 0,
-            width: 600,
+            width: 560,
             child: NetImage(
+              key: ValueKey<String>('sfondo:$backdrop'),
               url: backdrop,
               title: d.title,
-              decodeWidth: 600,
+              decodeWidth: 560,
               alignment: Alignment.topCenter,
-              showTitleOnFallback: false,
+              transparentPlaceholder: true,
+              fallback: false,
             ),
           ),
         const Positioned.fill(
           child: DecoratedBox(
             decoration: BoxDecoration(
               gradient: LinearGradient(
-                colors: [Brand.background, Color(0xE60A0A0F), Color(0x000A0A0F)],
-                stops: [0.0, 0.42, 0.8],
+                colors: [Brand.background, Color(0xE60B0812), Color(0x000B0812)],
+                stops: [0.0, 0.45, 0.82],
               ),
             ),
           ),
@@ -176,16 +221,16 @@ class _HeroBodyState extends State<_HeroBody> {
               gradient: LinearGradient(
                 begin: Alignment.bottomCenter,
                 end: Alignment.topCenter,
-                colors: [Brand.background, Color(0x000A0A0F)],
-                stops: [0.0, 0.45],
+                colors: [Brand.background, Color(0x000B0812)],
+                stops: [0.0, 0.42],
               ),
             ),
           ),
         ),
         Positioned(
           left: Layout.pagePadding,
-          top: Layout.safeTop + 6,
-          width: 440,
+          top: Layout.safeTop + 4,
+          width: 460,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,

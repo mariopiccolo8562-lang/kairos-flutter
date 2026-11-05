@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../app/theme.dart';
 
@@ -8,6 +9,8 @@ typedef RowItemBuilder = Widget Function(BuildContext context, int index, VoidCa
 ///
 /// Costruisce solo gli elementi visibili e, quando un elemento prende il
 /// focus, scorre con un'animazione morbida per tenerlo allineato a sinistra.
+/// All'ultimo elemento la freccia ▶ non fa "saltare" il focus su un'altra fila.
+/// La posizione della fila resta memorizzata anche quando esce dallo schermo.
 class ContentRow extends StatefulWidget {
   const ContentRow({
     super.key,
@@ -16,6 +19,7 @@ class ContentRow extends StatefulWidget {
     required this.itemExtent,
     required this.height,
     required this.itemBuilder,
+    this.storageId,
     this.onFocused,
     this.horizontalPadding = Layout.pagePadding,
   });
@@ -25,6 +29,9 @@ class ContentRow extends StatefulWidget {
   final double itemExtent;
   final double height;
   final RowItemBuilder itemBuilder;
+
+  /// Identificativo per ricordare lo scorrimento della fila.
+  final String? storageId;
   final VoidCallback? onFocused;
   final double horizontalPadding;
 
@@ -34,6 +41,7 @@ class ContentRow extends StatefulWidget {
 
 class _ContentRowState extends State<ContentRow> {
   final ScrollController _scroll = ScrollController();
+  int _focused = -1;
 
   @override
   void dispose() {
@@ -42,6 +50,7 @@ class _ContentRowState extends State<ContentRow> {
   }
 
   void _focusItem(int index) {
+    _focused = index;
     widget.onFocused?.call();
     if (!_scroll.hasClients) return;
     final max = _scroll.position.maxScrollExtent;
@@ -50,34 +59,61 @@ class _ContentRowState extends State<ContentRow> {
     _scroll.animateTo(target, duration: const Duration(milliseconds: 220), curve: Curves.easeOutCubic);
   }
 
+  KeyEventResult _onKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) return KeyEventResult.ignored;
+    // fine della fila: ▶ resta qui invece di finire su una locandina di un'altra fila
+    if (event.logicalKey == LogicalKeyboardKey.arrowRight && _focused >= widget.itemCount - 1) {
+      return node.hasFocus ? KeyEventResult.handled : KeyEventResult.ignored;
+    }
+    return KeyEventResult.ignored;
+  }
+
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      height: widget.height,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            height: Layout.rowTitleHeight,
-            child: Padding(
-              padding: EdgeInsets.only(left: widget.horizontalPadding),
-              child: Text(widget.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppText.rowTitle),
-            ),
-          ),
-          Expanded(
-            child: ListView.builder(
-              controller: _scroll,
-              scrollDirection: Axis.horizontal,
-              padding: EdgeInsets.symmetric(horizontal: widget.horizontalPadding, vertical: Layout.rowPadding),
-              itemExtent: widget.itemExtent,
-              itemCount: widget.itemCount,
-              itemBuilder: (context, index) => Align(
-                alignment: Alignment.topLeft,
-                child: widget.itemBuilder(context, index, () => _focusItem(index)),
+    final id = widget.storageId;
+    return Focus(
+      canRequestFocus: false,
+      skipTraversal: true,
+      onKeyEvent: _onKey,
+      onFocusChange: (has) {
+        if (!has) _focused = -1;
+      },
+      child: SizedBox(
+        height: widget.height,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              height: Layout.rowTitleHeight,
+              child: Padding(
+                padding: EdgeInsets.only(left: widget.horizontalPadding, right: Layout.pageRight),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(widget.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppText.rowTitle),
+                ),
               ),
             ),
-          ),
-        ],
+            Expanded(
+              child: ListView.builder(
+                key: id == null ? null : PageStorageKey<String>('fila:$id'),
+                controller: _scroll,
+                scrollDirection: Axis.horizontal,
+                padding: EdgeInsets.only(
+                  left: widget.horizontalPadding,
+                  right: Layout.pageRight,
+                  top: Layout.rowPadding,
+                  bottom: Layout.rowPadding,
+                ),
+                itemExtent: widget.itemExtent,
+                itemCount: widget.itemCount,
+                itemBuilder: (context, index) => Align(
+                  alignment: Alignment.topLeft,
+                  child: widget.itemBuilder(context, index, () => _focusItem(index)),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

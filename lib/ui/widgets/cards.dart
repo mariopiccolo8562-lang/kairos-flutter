@@ -21,37 +21,41 @@ class PosterCard extends StatelessWidget {
     required this.onSelect,
     this.onFocused,
     this.focusNode,
-    this.autofocus = false,
   });
 
   final MediaItem item;
   final VoidCallback onSelect;
   final VoidCallback? onFocused;
   final FocusNode? focusNode;
-  final bool autofocus;
 
   @override
   Widget build(BuildContext context) {
     return TvFocusable(
       focusNode: focusNode,
-      autofocus: autofocus,
       autoScroll: false,
       onSelect: onSelect,
       onFocusChange: (focused) {
         if (focused) onFocused?.call();
       },
-      builder: (context, focused) => RepaintBoundary(
-        child: AnimatedScale(
-          scale: focused ? 1.1 : 1.0,
-          duration: const Duration(milliseconds: 150),
-          curve: Curves.easeOutCubic,
-          child: Container(
-            width: Layout.posterWidth,
-            height: Layout.posterHeight,
-            clipBehavior: Clip.antiAlias,
-            decoration: const BoxDecoration(color: Brand.card, borderRadius: _radius),
-            foregroundDecoration: _focusBorder(focused),
-            child: NetImage(url: item.image, title: item.name, decodeWidth: Layout.posterWidth),
+      // l'immagine sta in un livello suo: l'ingrandimento sposta il livello senza ridisegnarla
+      builder: (context, focused) => AnimatedScale(
+        scale: focused ? 1.1 : 1.0,
+        duration: const Duration(milliseconds: 140),
+        curve: Curves.easeOutCubic,
+        child: Container(
+          width: Layout.posterWidth,
+          height: Layout.posterHeight,
+          foregroundDecoration: _focusBorder(focused),
+          child: RepaintBoundary(
+            child: ClipRRect(
+              borderRadius: _radius,
+              child: ColoredBox(
+                color: Brand.card,
+                child: SizedBox.expand(
+                  child: NetImage(url: item.image, title: item.name, decodeWidth: Layout.posterWidth),
+                ),
+              ),
+            ),
           ),
         ),
       ),
@@ -71,7 +75,6 @@ class WideCard extends StatelessWidget {
     this.progress,
     this.onFocused,
     this.focusNode,
-    this.autofocus = false,
   });
 
   final String title;
@@ -82,67 +85,77 @@ class WideCard extends StatelessWidget {
   final VoidCallback onSelect;
   final VoidCallback? onFocused;
   final FocusNode? focusNode;
-  final bool autofocus;
 
   @override
   Widget build(BuildContext context) {
     final value = progress;
+    final sub = subtitle;
     return TvFocusable(
       focusNode: focusNode,
-      autofocus: autofocus,
       autoScroll: false,
       onSelect: onSelect,
       onFocusChange: (focused) {
         if (focused) onFocused?.call();
       },
-      builder: (context, focused) => RepaintBoundary(
-        child: SizedBox(
-          width: Layout.wideWidth,
-          height: Layout.wideCardHeight,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              AnimatedScale(
-                scale: focused ? 1.06 : 1.0,
-                duration: const Duration(milliseconds: 150),
-                curve: Curves.easeOutCubic,
-                child: Container(
-                  width: Layout.wideWidth,
-                  height: Layout.wideHeight,
-                  clipBehavior: Clip.antiAlias,
-                  decoration: const BoxDecoration(color: Brand.card, borderRadius: _radius),
-                  foregroundDecoration: _focusBorder(focused),
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      if (isLogo && image != null)
-                        Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: NetImage(url: image, title: title, fit: BoxFit.contain, decodeWidth: 160),
-                        )
-                      else
-                        NetImage(url: image, title: title, decodeWidth: Layout.wideWidth),
-                      if (value != null)
-                        Positioned(left: 0, right: 0, bottom: 0, child: ProgressBar(value: value)),
-                    ],
+      builder: (context, focused) => SizedBox(
+        width: Layout.wideWidth,
+        height: Layout.wideCardHeight,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            AnimatedScale(
+              scale: focused ? 1.06 : 1.0,
+              duration: const Duration(milliseconds: 140),
+              curve: Curves.easeOutCubic,
+              child: Container(
+                width: Layout.wideWidth,
+                height: Layout.wideHeight,
+                foregroundDecoration: _focusBorder(focused),
+                child: RepaintBoundary(
+                  child: ClipRRect(
+                    borderRadius: _radius,
+                    child: ColoredBox(
+                      color: Brand.card,
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          if (isLogo && image != null)
+                            Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: NetImage(url: image, title: title, fit: BoxFit.contain, decodeWidth: 160),
+                            )
+                          else
+                            NetImage(url: image, title: title, decodeWidth: Layout.wideWidth),
+                          if (value != null)
+                            Positioned(left: 0, right: 0, bottom: 0, child: ProgressBar(value: value)),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ),
-              const SizedBox(height: 6),
-              Text(
+            ),
+            const SizedBox(height: 6),
+            SizedBox(
+              height: 18,
+              child: Text(
                 title,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
                   fontSize: 13,
+                  height: 1.25,
                   fontWeight: focused ? FontWeight.w700 : FontWeight.w500,
                   color: focused ? Colors.white : const Color(0xB3FFFFFF),
                 ),
               ),
-              if (subtitle != null)
-                Text(subtitle!, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppText.small),
-            ],
-          ),
+            ),
+            if (sub != null)
+              SizedBox(
+                height: 16,
+                child: Text(sub, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppText.small),
+              ),
+          ],
         ),
       ),
     );
@@ -168,7 +181,7 @@ class ProgressBar extends StatelessWidget {
           FractionallySizedBox(
             alignment: Alignment.centerLeft,
             widthFactor: v,
-            child: ColoredBox(color: Theme.of(context).colorScheme.primary),
+            child: const ColoredBox(color: Brand.accent),
           ),
         ],
       ),
@@ -186,13 +199,10 @@ class TagLabel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.primary,
-        borderRadius: BorderRadius.circular(4),
-      ),
+      decoration: BoxDecoration(color: Brand.accent, borderRadius: BorderRadius.circular(4)),
       child: Text(
         text,
-        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: Colors.black),
+        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800, height: 1.2, color: Colors.black),
       ),
     );
   }

@@ -1,53 +1,46 @@
-# Kairos (Flutter) — anteprima
+# Kairos Plus
 
-App streaming per **Fire TV con Fire OS** e **Android TV**, scritta in Flutter.
+App streaming stile Netflix per **Fire TV (Fire OS)**, Android TV e telefoni Android, collegata al **pannello Kairos** come le altre app Kairos (Kairos Pro, Kairos TV, Kairos Lite, Kairos XC). Si installa accanto a loro (pacchetto `com.kairos.plus`).
+
+## Attivazione (come le altre app Kairos)
+
+1. Al primo avvio la TV mostra il suo **codice di attivazione** (`KX12-AB34`).
+2. Il fornitore lo attiva dal pannello e assegna le playlist (Xtream o M3U): l'app si sblocca da sola (controlla ogni 12 secondi).
+3. In alternativa: **Collega con codice a 6 cifre**, generato da un'altra TV già attiva (Impostazioni → «Collega un'altra TV»).
+
+Dal pannello funzionano: attivazione e scadenza, playlist (anche più di una, con scelta in Impostazioni), cambio DNS, manutenzione, **Disconnetti**, limite di visioni contemporanee, permessi, messaggi, collegamento di altre TV. In *Utenti online* la versione compare come `plus 0.1.N`.
 
 ## Cosa c'è
 
-- Accesso con **Xtream Codes**, **link M3U** oppure **demo** (contenuti di prova pubblici).
-- Interfaccia per telecomando in stile Netflix: barra laterale, intestazione con
-  immagine e trama, file di locandine che scorrono in modo morbido.
-- **TV in diretta** con categorie, canali e guida TV (programma attuale e successivo).
-- **Film e Serie TV** con schede, stagioni ed episodi, "Continua a guardare" e "La mia lista".
-- **Player**: zapping con ▲▼, avanti/indietro con ◀▶, ripresa dal punto lasciato,
-  episodio successivo automatico, riconnessione automatica se il flusso cade.
+- Home stile Netflix: «Continua a guardare», La mia lista, novità, categorie.
+- TV in diretta a tre colonne (categorie · canali · scheda con guida adesso/dopo).
+- Film e serie con stagioni ed episodi, posizione di visione salvata, episodio successivo automatico.
+- Ricerca istantanea, preferiti.
+- **Lettore nativo** (Media3/ExoPlayer su SurfaceView, stessa configurazione di Kairos Lite e Kairos TV): video fluido anche sulle Fire TV Stick, riconnessione automatica, cambio canale con ▲▼ e con i numeri, guida in sovrimpressione.
+- **Modalità leggera** automatica sulle chiavette con meno di ~1,8 GB di RAM (niente sfondi grandi, meno memoria per le immagini).
 
 ## Struttura
 
 ```
-lib/
-  app/      tema, marchio (brand.dart), avvio
-  core/     rete, JSON, formattazione
-  data/     modelli, sorgenti (Xtream, M3U, demo), cache del catalogo
-  state/    AppController: stato dell'app
-  ui/       schermate, player e componenti TV
+lib/app/            avvio, tema, marchio (nome, colori)
+lib/panel/          pannello Kairos: codice TV, attivazione, battito, collegamento
+lib/state/          stato dell'app (attivazione, catalogo, preferiti, progressi, battito)
+lib/data/           modelli, sorgenti Xtream/M3U, cache del catalogo
+lib/ui/             schermate e componenti per il telecomando
+android/app/src/main/kotlin/com/kairos/plus/   lettore nativo (PlayerActivity) e ponte con Flutter
+.github/workflows/android.yml                  compilazione e pubblicazione dell'APK
 ```
 
-## Compilare
+## Pubblicazione
 
-```bash
-flutter pub get
-flutter analyze
-flutter test
-flutter build apk --release
-```
+Ogni modifica su `main` compila l'APK e pubblica la release `v0.1.N` con:
 
-## Pubblicazione nel Kairos Store
+- `kairos-plus.apk` — link fisso per il Kairos Store:
+  `https://github.com/mariopiccolo8562-lang/kairos-flutter/releases/latest/download/kairos-plus.apk`
+- `kairos-plus.json` — versione per il pannello.
 
-Ogni push su `main` compila l'APK con GitHub Actions e lo pubblica come release
-`v0.1.N` di questo repository (N cresce a ogni compilazione). Il Kairos Store
-(`docs/apps.json` in **kairos-store**) usa il link fisso dell'ultima release:
+### Firma
 
-```
-https://github.com/mariopiccolo8562-lang/kairos-flutter/releases/latest/download/kairos-flutter.apk
-```
+Senza segreti l'APK è firmato con la chiave **di anteprima** del repository (pubblica). Per la distribuzione ai clienti crea in *Settings → Secrets and variables → Actions* i segreti `ANDROID_KEYSTORE_B64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` (anche gli stessi di Kairos Lite / Kairos TV). Cambiare chiave richiede di disinstallare e reinstallare l'app una volta: va fatto prima di darla ai clienti.
 
-Quindi ogni nuova versione arriva nello store da sola, senza toccare l'elenco app.
-
-## Firma
-
-L'APK è firmato con la chiave di **anteprima** `android/keys/preview.jks`, sempre la
-stessa, così gli aggiornamenti si installano sopra la versione precedente.
-Questo repository è **pubblico**: la chiave di anteprima è quindi visibile a tutti.
-Prima della distribuzione ai clienti va sostituita con una chiave definitiva
-custodita nei segreti di GitHub (non nel repository).
+L'app è solo un lettore e non contiene canali: i contenuti arrivano dalle playlist assegnate dal pannello.

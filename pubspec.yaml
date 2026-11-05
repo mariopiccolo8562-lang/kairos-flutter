@@ -1,5 +1,5 @@
-name: streaming_tv
-description: "App streaming per Fire TV e Android TV (anteprima)."
+name: kairos_plus
+description: "Kairos Plus: app streaming per Fire TV e Android TV, attivata dal pannello Kairos."
 publish_to: 'none'
 
 version: 0.1.0+1
@@ -10,10 +10,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  cupertino_icons: ^1.0.8
-  video_player: ^2.14.1
   shared_preferences: ^2.5.6
-  wakelock_plus: ^1.8.2
   cached_network_image: ^4.0.6
   flutter_cache_manager: ^3.4.1
   path_provider: ^2.1.5
@@ -25,3 +22,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/brand/

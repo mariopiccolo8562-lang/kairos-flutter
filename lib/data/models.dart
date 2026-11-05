@@ -2,7 +2,7 @@ import '../core/json.dart';
 
 enum MediaKind { live, movie, series }
 
-enum AccountType { xtream, m3u, demo }
+enum AccountType { xtream, m3u }
 
 const String uncategorizedId = '__altri';
 
@@ -63,7 +63,7 @@ class MediaItem {
   final String? extension; // contenitore del file (mkv, mp4…)
   final String? epgId;
   final int? number;
-  final String? url; // indirizzo diretto (liste M3U e demo)
+  final String? url; // indirizzo diretto (liste M3U)
 
   String get key => '${kind.name}:$id';
 
@@ -217,8 +217,6 @@ class EpgEntry {
 class Account {
   const Account({required this.type, this.server, this.username, this.password, this.m3uUrl});
 
-  const Account.demo() : this(type: AccountType.demo);
-
   final AccountType type;
   final String? server;
   final String? username;
@@ -279,7 +277,7 @@ class AccountInfo {
   }
 }
 
-/// Quello che il player deve riprodurre.
+/// Quello che il lettore deve riprodurre.
 class PlaybackItem {
   const PlaybackItem({
     required this.key,
@@ -288,7 +286,11 @@ class PlaybackItem {
     this.subtitle,
     this.image,
     this.isLive = false,
+    this.kind = MediaKind.movie,
     this.channel,
+    this.altUrls = const <String>[],
+    this.epgUrl,
+    this.group,
   });
 
   final String key;
@@ -297,14 +299,43 @@ class PlaybackItem {
   final String? subtitle;
   final String? image;
   final bool isLive;
+  final MediaKind kind;
 
-  /// Solo per i canali: serve a leggere la guida TV.
+  /// Solo per i canali: numero, guida TV, categoria.
   final MediaItem? channel;
+
+  /// Indirizzi alternativi (es. lo stesso canale in HLS e in MPEG-TS).
+  final List<String> altUrls;
+  final String? epgUrl;
+  final String? group;
+
+  /// Stato per il pannello (Online ora): live, movie, series.
+  String get watchState => switch (kind) {
+        MediaKind.live => 'live',
+        MediaKind.movie => 'movie',
+        MediaKind.series => 'series',
+      };
+
+  /// Dati per il lettore nativo.
+  Map<String, Object?> toPlayerJson() => {
+        'key': key,
+        'title': title,
+        'sub': subtitle ?? '',
+        'url': url,
+        'alt': altUrls,
+        'live': isLive,
+        'kind': watchState,
+        'num': channel?.number ?? 0,
+        'epg': epgUrl ?? '',
+        'group': group ?? '',
+        'chId': channel?.id ?? '',
+      };
 
   Map<String, Object?> toJson() => {
         'key': key,
         'title': title,
         'url': url,
+        'kind': kind.index,
         if (subtitle != null) 'subtitle': subtitle,
         if (image != null) 'image': image,
       };
@@ -315,12 +346,16 @@ class PlaybackItem {
     final title = asString(m['title']);
     final url = asString(m['url']);
     if (key == null || title == null || url == null) return null;
+    final k = asInt(m['kind']);
     return PlaybackItem(
       key: key,
       title: title,
       url: url,
       subtitle: asString(m['subtitle']),
       image: asString(m['image']),
+      kind: k != null && k >= 0 && k < MediaKind.values.length
+          ? MediaKind.values[k]
+          : (key.startsWith('episode:') ? MediaKind.series : MediaKind.movie),
     );
   }
 }

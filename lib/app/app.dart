@@ -7,14 +7,14 @@ import 'app_scope.dart';
 import 'brand.dart';
 import 'theme.dart';
 
-class StreamingApp extends StatefulWidget {
-  const StreamingApp({super.key});
+class KairosPlusApp extends StatefulWidget {
+  const KairosPlusApp({super.key});
 
   @override
-  State<StreamingApp> createState() => _StreamingAppState();
+  State<KairosPlusApp> createState() => _KairosPlusAppState();
 }
 
-class _StreamingAppState extends State<StreamingApp> {
+class _KairosPlusAppState extends State<KairosPlusApp> {
   final AppController _controller = AppController();
 
   @override
@@ -42,10 +42,18 @@ class _StreamingAppState extends State<StreamingApp> {
           ...WidgetsApp.defaultShortcuts,
           const SingleActivator(LogicalKeyboardKey.select): const ActivateIntent(),
         },
-        builder: (context, child) => FocusTraversalGroup(
-          policy: ReadingOrderTraversalPolicy(requestFocusCallback: _moveFocusOnly),
-          child: child ?? const SizedBox.shrink(),
-        ),
+        builder: (context, child) {
+          // Misure fisse da TV: la dimensione del testo di sistema non deve
+          // ingrandire le scritte (testi tagliati, elementi sovrapposti).
+          final media = MediaQuery.of(context);
+          return MediaQuery(
+            data: media.copyWith(textScaler: TextScaler.noScaling),
+            child: FocusTraversalGroup(
+              policy: ReadingOrderTraversalPolicy(requestFocusCallback: _moveFocusOnly),
+              child: child ?? const SizedBox.shrink(),
+            ),
+          );
+        },
         home: const BootstrapScreen(),
       ),
     );

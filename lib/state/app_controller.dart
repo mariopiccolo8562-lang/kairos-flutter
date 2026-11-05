@@ -1,78 +1,422 @@
 import 'dart:async';
+import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 
-import '../core/net.dart';
+import '../core/json.dart';
+import '../core/native.dart';
+import '../core/net.dart' as net;
 import '../data/catalog_repository.dart';
 import '../data/models.dart';
 import '../data/sources/content_source.dart';
-import '../data/sources/xtream_source.dart';
 import '../data/user_store.dart';
+import '../panel/panel.dart';
 
-enum SessionStatus { starting, loggedOut, loading, ready, error }
+enum SessionStatus { starting, activation, loading, ready, error }
+
+/// Cosa mostrare nella schermata di attivazione.
+class ActivationInfo {
+  const ActivationInfo({required this.status, required this.message, this.warn = false});
+
+  /// checking | pending | locked | expired | disabled | maintenance | offline
+  final String status;
+  final String message;
+  final bool warn;
+}
+
+/// Cosa si sta guardando (per «Online ora» nel pannello).
+class _Watch {
+  const _Watch({required this.state, required this.title, this.channel = '', this.channelId = '', this.group = ''});
+
+  final String state; // live | movie | series
+  final String title;
+  final String channel;
+  final String channelId;
+  final String group;
+
+  static _Watch of(PlaybackItem item) => item.isLive
+      ? _Watch(
+          state: 'live',
+          title: item.title,
+          channel: item.title,
+          channelId: item.channel?.id ?? '',
+          group: item.group ?? '',
+        )
+      : _Watch(state: item.watchState, title: item.subtitle == null ? item.title : '${item.title} · ${item.subtitle}');
+}
 
 /// Stato dell'app. Ogni informazione ha il suo "canale" di notifica
 /// (catalogo, preferiti, progressi…): una schermata si ridisegna solo
 /// quando cambia ciò che mostra davvero.
+///
+/// L'accesso funziona come nelle altre app Kairos: la TV mostra il suo codice,
+/// il fornitore la attiva dal pannello e le playlist arrivano da lì.
 class AppController {
   final UserStore _store = UserStore();
 
   final ValueNotifier<SessionStatus> status = ValueNotifier(SessionStatus.starting);
+  final ValueNotifier<ActivationInfo> activation =
+      ValueNotifier(const ActivationInfo(status: 'checking', message: 'Collegamento al server…'));
+  final ValueNotifier<PanelState?> panelState = ValueNotifier(null);
   final ValueNotifier<Catalog?> catalog = ValueNotifier(null);
-  final ValueNotifier<AccountInfo?> accountInfo = ValueNotifier(null);
   final ValueNotifier<String> liveFormat = ValueNotifier('ts');
   final ValueNotifier<int> favoritesRevision = ValueNotifier(0);
   final ValueNotifier<int> progressRevision = ValueNotifier(0);
 
-  Set<String> _favorites = <String>{};
-  Map<String, WatchProgress> _progress = <String, WatchProgress>{};
+  /// Avvisi da mostrare subito (es. «Disconnetti» dal pannello).
+  final ValueNotifier<String?> notice = ValueNotifier(null);
+
+  DeviceInfo device = const DeviceInfo();
+  PanelClient? _panel;
+  PanelState? _state;
+  PanelState? _deferredState;
+  PanelPlaylist? _playlist;
   Account? _account;
   ContentSource? _source;
 
-  /// Messaggio da mostrare se all'avvio il catalogo non si è potuto caricare.
+  Set<String> _favorites = <String>{};
+  Map<String, WatchProgress> _progress = <String, WatchProgress>{};
+  Set<String> _seenMessages = <String>{};
+  String _playlistChoice = '';
+  String _catalogSig = '';
+  bool _privacyOk = false;
+  int _kickSeen = 0;
+
+  /// Messaggio da mostrare se il catalogo non si è potuto caricare.
   String? startupError;
 
   final Map<String, (DateTime, List<EpgEntry>)> _epgCache = {};
   final Map<String, Future<MovieDetails?>> _movieDetails = {};
   final Map<String, Future<SeriesDetails?>> _seriesDetails = {};
 
+  AppLifecycleListener? _lifecycle;
+  StreamSubscription<PlayerEvent>? _playerSub;
+
+  bool get lite => device.isLite;
+  String get deviceCode => _panel?.identity.code ?? '';
+  String get appVersion => device.version.isEmpty ? '0.1' : device.version;
   Account? get account => _account;
+  PanelPlaylist? get playlist => _playlist;
   bool get supportsEpg => _source?.supportsEpg ?? false;
+  bool get privacyOk => _privacyOk;
 
   // ---------------------------------------------------------------------------
-  // Avvio, accesso e catalogo
+  // Avvio
 
   Future<void> start() async {
+    device = await NativeBridge.device();
+    final model = device.rawModel.replaceAll(RegExp(r'[^\x20-\x7E]'), '').trim();
+    net.userAgent =
+        'Mozilla/5.0 (Linux; Android ${device.release.isEmpty ? '9' : device.release}; ${model.isEmpty ? 'Android' : model}) KairosPlus/$appVersion';
+
+    // chiavette con poca memoria: meno immagini tenute in memoria
+    final imageCache = PaintingBinding.instance.imageCache;
+    imageCache.maximumSize = lite ? 160 : 250;
+    imageCache.maximumSizeBytes = (lite ? 40 : 80) << 20;
+
     _favorites = await _store.loadFavorites();
     _progress = await _store.loadProgress();
     liveFormat.value = await _store.loadLiveFormat();
-    final account = await _store.loadAccount();
-    if (account == null) {
-      status.value = SessionStatus.loggedOut;
-      return;
-    }
-    _useAccount(account);
+    _seenMessages = await _store.loadSeenMessages();
+    _playlistChoice = await _store.loadPlaylistChoice();
+    _catalogSig = await _store.loadCatalogSignature();
+    _privacyOk = await _store.loadPrivacyOk();
+    _kickSeen = await _store.loadKickSeen();
 
-    // Prima la cache: l'app si apre subito con i dati dell'ultima volta.
-    final cached = await CatalogRepository.readCache();
-    if (cached != null && !cached.isEmpty) {
-      catalog.value = cached;
-      status.value = SessionStatus.ready;
-      if (cached.isStale) unawaited(_refreshInBackground());
-    } else {
-      status.value = SessionStatus.loading;
-      final error = await _fetchAndApply();
-      if (error != null) {
-        startupError = error;
-        status.value = SessionStatus.error;
+    var identity = await _store.loadIdentity();
+    var id = identity == null ? null : PanelIdentity(identity.$1, identity.$2);
+    if (id == null || !id.isValid) {
+      id = PanelIdentity.generate();
+      await _store.saveIdentity(id.code, id.secret);
+    }
+    final saved = await _store.loadServer();
+    _panel = PanelClient(
+      identity: id,
+      server: saved != null && saved.startsWith('https://') ? saved : kDefaultPanelUrl,
+      model: device.model,
+      version: appVersion,
+    );
+
+    _playerSub = NativeBridge.playerEvents.listen(_onPlayerEvent);
+    _lifecycle = AppLifecycleListener(onResume: _onResume, onPause: _onPause);
+
+    // partenza immediata con l'ultimo stato attivo; il pannello si ricontrolla subito dopo
+    final cached = await _store.loadPanelState();
+    if (cached != null) {
+      final s = PanelState.parse(cached);
+      if (s.active) {
+        await _applyState(s);
+        unawaited(refreshPanel());
         return;
       }
-      status.value = SessionStatus.ready;
     }
-    unawaited(_loadAccountInfo());
+    status.value = SessionStatus.activation;
+    unawaited(_activationTick());
   }
 
+  void _onResume() {
+    _foreground = true;
+    if (status.value == SessionStatus.activation) {
+      unawaited(_activationTick());
+    } else if (status.value == SessionStatus.ready) {
+      unawaited(_beat(true));
+    }
+  }
+
+  void _onPause() {
+    _foreground = false;
+    _activationTimer?.cancel();
+  }
+
+  /// Ripete il caricamento dopo un errore.
   Future<void> retryStartup() async {
+    final s = _state;
+    if (s == null || !s.active) {
+      status.value = SessionStatus.activation;
+      unawaited(_activationTick());
+      return;
+    }
+    _catalogSig = '';
+    await _applyState(s);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Attivazione dal pannello
+
+  Timer? _activationTimer;
+  bool _activationBusy = false;
+
+  Future<void> retryActivationNow() => _activationTick();
+
+  Future<void> _activationTick() async {
+    _activationTimer?.cancel();
+    final panel = _panel;
+    if (panel == null || _activationBusy || status.value != SessionStatus.activation) return;
+    _activationBusy = true;
+    PanelState? s;
+    String? error;
+    try {
+      s = await panel.register();
+    } on PanelException catch (e) {
+      error = e.message;
+    }
+    _activationBusy = false;
+    if (s != null) {
+      await _onRegistered(s);
+      if (status.value != SessionStatus.activation) return;
+      final seconds = switch (s.status) {
+        'pending' => 12, // come le altre app Kairos
+        'maintenance' => 30,
+        _ => 60,
+      };
+      _scheduleActivation(Duration(seconds: seconds));
+    } else {
+      activation.value = ActivationInfo(status: 'offline', message: '${error ?? 'Errore di rete'}. Riprovo tra poco…', warn: true);
+      _scheduleActivation(const Duration(seconds: 8));
+    }
+  }
+
+  void _scheduleActivation(Duration delay) {
+    _activationTimer?.cancel();
+    if (!_foreground) return;
+    _activationTimer = Timer(delay, () => unawaited(_activationTick()));
+  }
+
+  /// Rilegge lo stato dal pannello e riallinea l'app.
+  Future<void> refreshPanel() async {
+    final panel = _panel;
+    if (panel == null) return;
+    _lastRegister = _clock.elapsedMilliseconds;
+    try {
+      final s = await panel.register();
+      await _onRegistered(s);
+    } on PanelException {
+      // senza rete si continua con l'ultimo stato
+    }
+  }
+
+  Future<void> _onRegistered(PanelState s) async {
+    final panel = _panel;
+    // il pannello può indicare un nuovo indirizzo per sé stesso
+    var moved = s.setting('serverUrl').trim();
+    while (moved.endsWith('/')) {
+      moved = moved.substring(0, moved.length - 1);
+    }
+    if (panel != null && moved.startsWith('https://') && moved != panel.server) {
+      panel.server = moved;
+      await _store.saveServer(moved);
+    }
+
+    if (s.status == 'maintenance') {
+      // manutenzione: l'ultimo stato buono resta salvato, si aspetta che finisca
+      _goActivation(ActivationInfo(
+        status: 'maintenance',
+        message: '${s.maintMsg.isEmpty ? 'Servizio in manutenzione: torna disponibile tra poco.' : s.maintMsg}\nL\'app riparte da sola appena finisce.',
+        warn: true,
+      ));
+      return;
+    }
+    if (s.active) {
+      await _store.savePanelState(s.raw);
+      if (_watching != null) {
+        // mai durante la visione: si applica quando il lettore si chiude
+        _state = s;
+        panelState.value = s;
+        _deferredState = s;
+        return;
+      }
+      await _applyState(s);
+      return;
+    }
+    await _store.savePanelState(null);
+    _state = s;
+    panelState.value = s;
+    _goActivation(_activationInfoFor(s));
+  }
+
+  void _goActivation(ActivationInfo info) {
+    activation.value = info;
+    if (status.value != SessionStatus.activation) {
+      _stopPulse();
+      if (_watching != null) unawaited(NativeBridge.closePlayer());
+      status.value = SessionStatus.activation;
+      _scheduleActivation(Duration(seconds: info.status == 'maintenance' ? 30 : 12));
+    }
+  }
+
+  ActivationInfo _activationInfoFor(PanelState s) {
+    String contact() {
+      final price = s.setting('price');
+      final c = s.setting('supportContact');
+      return '${price.isNotEmpty ? '\nRinnovo: $price.' : ''}${c.isNotEmpty ? '\nContatto: $c' : ''}';
+    }
+
+    return switch (s.status) {
+      'locked' => const ActivationInfo(
+          status: 'locked',
+          message: 'Questo codice è già usato da un altro dispositivo. Chiedi al tuo fornitore di sbloccarlo dal pannello.',
+          warn: true,
+        ),
+      'expired' => ActivationInfo(
+          status: 'expired',
+          message: 'Abbonamento scaduto${s.expires.isEmpty ? '' : ' il ${s.expiresLabel}'}.${contact()}',
+          warn: true,
+        ),
+      'disabled' => ActivationInfo(status: 'disabled', message: 'Abbonamento sospeso dal fornitore.${contact()}', warn: true),
+      _ => const ActivationInfo(status: 'pending', message: 'In attesa di attivazione…'),
+    };
+  }
+
+  /// Collega questa TV a un abbonamento già attivo con il codice a 6 cifre.
+  Future<String?> linkWithPin(String pin) async {
+    final panel = _panel;
+    if (panel == null) return 'Server non configurato';
+    final error = await panel.link(pin);
+    if (error == null) await _activationTick();
+    return error;
+  }
+
+  /// Codice a 6 cifre per collegare un'altra TV.
+  Future<String> createLinkCode() async {
+    final panel = _panel;
+    if (panel == null) throw const PanelException('Server non configurato');
+    return panel.linkCode();
+  }
+
+  bool get canLinkTv {
+    final s = _state;
+    return s != null && s.active && (s.account?.primary ?? true) && s.perm('link');
+  }
+
+  Future<String> privacyText() async {
+    final panel = _panel;
+    final text = panel == null ? '' : await panel.privacyText(_state);
+    return text.isNotEmpty
+        ? text
+        : 'Usando l\'app accetti le condizioni del servizio del tuo fornitore. L\'app è solo un lettore: i contenuti arrivano dalle playlist assegnate dal fornitore.';
+  }
+
+  Future<void> acceptPrivacy() async {
+    _privacyOk = true;
+    await _store.savePrivacyOk();
+  }
+
+  List<PanelMessage> unseenMessages() => [
+        for (final m in _state?.messages ?? const <PanelMessage>[])
+          if (m.id.isNotEmpty && !_seenMessages.contains(m.id)) m,
+      ];
+
+  Future<void> markMessagesSeen(Iterable<PanelMessage> messages) async {
+    _seenMessages.addAll([for (final m in messages) m.id]);
+    await _store.saveSeenMessages(_seenMessages);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Playlist e catalogo
+
+  List<PanelPlaylist> get playlists => [
+        for (final p in _state?.playlists ?? const <PanelPlaylist>[])
+          if (p.toAccount() != null) p,
+      ];
+
+  bool get canSwitchPlaylist => (_state?.perm('plSwitch') ?? false) && playlists.length > 1;
+
+  PanelPlaylist? _choosePlaylist(PanelState s) {
+    final all = [for (final p in s.playlists) if (p.toAccount() != null) p];
+    if (all.isEmpty) return null;
+    PanelPlaylist? find(String id) {
+      for (final p in all) {
+        if (p.id == id) return p;
+      }
+      return null;
+    }
+
+    if (_playlistChoice.isNotEmpty && s.perm('plSwitch')) {
+      final chosen = find(_playlistChoice);
+      if (chosen != null) return chosen;
+    }
+    return find(s.account?.plDefault ?? '') ?? all.first;
+  }
+
+  Future<void> choosePlaylist(String id) async {
+    _playlistChoice = id;
+    await _store.savePlaylistChoice(id);
+    final s = _state;
+    if (s != null && s.active) await _applyState(s);
+  }
+
+  Future<void> _applyState(PanelState s) async {
+    _state = s;
+    panelState.value = s;
+    final pl = _choosePlaylist(s);
+    final account = pl?.toAccount();
+    if (pl == null || account == null) {
+      startupError = 'Nessuna playlist assegnata a questo dispositivo: chiedi al tuo fornitore di aggiungerla dal pannello.';
+      status.value = SessionStatus.error;
+      _startPulse();
+      return;
+    }
+    final sig = pl.signature;
+    final sameList = sig == _catalogSig;
+    _playlist = pl;
+    _useAccount(account);
+    _startPulse();
+
+    // stesso elenco (al massimo è cambiato il DNS): il catalogo resta quello che c'è
+    if (sameList && catalog.value != null) {
+      if (status.value != SessionStatus.ready) status.value = SessionStatus.ready;
+      return;
+    }
+    if (sameList) {
+      final cached = await CatalogRepository.readCache();
+      if (cached != null && !cached.isEmpty) {
+        catalog.value = cached;
+        status.value = SessionStatus.ready;
+        if (cached.isStale) unawaited(_refreshInBackground());
+        return;
+      }
+    }
     status.value = SessionStatus.loading;
     final error = await _fetchAndApply();
     if (error != null) {
@@ -80,68 +424,37 @@ class AppController {
       status.value = SessionStatus.error;
       return;
     }
+    _catalogSig = sig;
+    await _store.saveCatalogSignature(sig);
     status.value = SessionStatus.ready;
-    unawaited(_loadAccountInfo());
   }
 
-  /// Restituisce null se l'accesso è riuscito, altrimenti il messaggio d'errore.
-  Future<String?> login(Account account) async {
-    try {
-      AccountInfo? info;
-      if (account.type == AccountType.xtream) {
-        info = await XtreamSource(account).authenticate();
-      }
-      final fresh = await CatalogRepository.fetch(account);
-      if (fresh.isEmpty) return 'Nessun contenuto trovato per questo account';
-      await _store.saveAccount(account);
-      _useAccount(account);
-      accountInfo.value = info;
-      catalog.value = fresh;
-      startupError = null;
-      status.value = SessionStatus.ready;
-      return null;
-    } on SourceException catch (e) {
-      return e.message;
-    } on Object catch (e) {
-      return 'Errore inatteso: $e';
+  void _useAccount(Account account) {
+    final previous = _account;
+    _account = account;
+    _source = ContentSource.of(account);
+    if (previous == null ||
+        previous.server != account.server ||
+        previous.username != account.username ||
+        previous.m3uUrl != account.m3uUrl) {
+      _epgCache.clear();
+      _movieDetails.clear();
+      _seriesDetails.clear();
     }
   }
 
   /// Aggiornamento chiesto dall'utente: le novità si vedono subito.
   Future<String?> refreshCatalog() => _fetchAndApply();
 
-  Future<void> logout() async {
-    await _store.saveAccount(null);
-    await _store.clearUserData();
-    await CatalogRepository.clearCache();
-    _account = null;
-    _source = null;
-    _favorites = <String>{};
-    _progress = <String, WatchProgress>{};
-    catalog.value = null;
-    accountInfo.value = null;
-    favoritesRevision.value++;
-    progressRevision.value++;
-    status.value = SessionStatus.loggedOut;
-  }
-
-  void _useAccount(Account account) {
-    _account = account;
-    _source = ContentSource.of(account);
-    _epgCache.clear();
-    _movieDetails.clear();
-    _seriesDetails.clear();
-  }
-
   Future<String?> _fetchAndApply() async {
     final account = _account;
-    if (account == null) return 'Nessun account configurato';
+    if (account == null) return 'Nessuna playlist configurata';
     try {
       final fresh = await CatalogRepository.fetch(account);
-      if (fresh.isEmpty) return 'Il server non ha restituito contenuti';
+      if (fresh.isEmpty) return 'La playlist non contiene contenuti';
       catalog.value = fresh;
       return null;
-    } on SourceException catch (e) {
+    } on net.SourceException catch (e) {
       return e.message;
     } on Object catch (e) {
       return 'Errore inatteso: $e';
@@ -160,15 +473,262 @@ class AppController {
     }
   }
 
-  Future<void> _loadAccountInfo() async {
-    final account = _account;
-    if (account == null || account.type != AccountType.xtream) return;
+  // ---------------------------------------------------------------------------
+  // Battito verso il pannello (Online ora, Disconnetti, cambi dal pannello)
+
+  final Stopwatch _clock = Stopwatch()..start();
+  Timer? _pulseTimer;
+  bool _foreground = true;
+  bool _playerVisible = false;
+  _Watch? _watching;
+  List<PlaybackItem> _playing = const <PlaybackItem>[];
+  int _lastBeat = -1;
+  int _lastRegister = 0;
+  String _lastSig = '';
+  int _kickAck = 0;
+  String _pv = '';
+  bool _beating = false;
+
+  void _startPulse() {
+    if (_pulseTimer != null) return;
+    _lastRegister = _clock.elapsedMilliseconds;
+    _pulseTimer = Timer.periodic(const Duration(seconds: 20), (_) => unawaited(_beat(false)));
+    Timer(const Duration(seconds: 4), () => unawaited(_beat(false)));
+  }
+
+  void _stopPulse() {
+    _pulseTimer?.cancel();
+    _pulseTimer = null;
+  }
+
+  Future<void> _beat(bool force) async {
+    final s = _state;
+    final panel = _panel;
+    if (s == null || !s.active || panel == null || _beating) return;
+    final w = _watching;
+    if (!_foreground && (w == null || !_playerVisible)) return;
+    final sig = '${w?.state ?? 'idle'}|${w?.channelId ?? ''}|${w?.title ?? ''}';
+    final now = _clock.elapsedMilliseconds;
+    if (!force && sig == _lastSig && _lastBeat >= 0 && now - _lastBeat < (w == null ? 60000 : 20000)) return;
+    // il pannello accetta al massimo un battito ogni 15 secondi
+    if (_lastBeat >= 0 && now - _lastBeat < 15000) return;
+    _lastSig = sig;
+    _lastBeat = now;
+    _beating = true;
     try {
-      accountInfo.value = await XtreamSource(account).authenticate();
-    } on Object {
-      // informazioni facoltative
+      final j = await panel.heartbeat(
+        state: w?.state ?? 'idle',
+        title: w?.title ?? '',
+        channel: w?.channel ?? '',
+        channelId: w?.channelId ?? '',
+        group: w?.group ?? '',
+        screen: w == null ? 'home' : 'player',
+        kickAck: _kickAck,
+      );
+      if (j != null) await _handleBeat(j);
+    } finally {
+      _beating = false;
     }
   }
+
+  Future<void> _handleBeat(Map<String, dynamic> j) async {
+    final kick = asInt(j['kick']) ?? 0;
+    if (kick > 0) {
+      _kickAck = kick;
+      if (kick != _kickSeen) {
+        _kickSeen = kick;
+        unawaited(_store.saveKickSeen(kick));
+        if (_watching != null) await NativeBridge.closePlayer();
+        notice.value = 'Il tuo fornitore ha chiuso la visione su questo dispositivo.';
+      }
+    }
+    final s = _state;
+    if (s == null) return;
+    var changed = false;
+    final acc = s.account;
+    final ms = asInt(j['ms']);
+    if (ms != null && acc != null && ms != acc.maxStreams) changed = true;
+    final pm = asString(j['pm']) ?? '';
+    if (pm.isNotEmpty && acc != null && pm.split('|').take(2).join('|') != '${acc.plMode}|${acc.plDefault}') {
+      changed = true;
+    }
+    if (j.containsKey('ph')) {
+      var off = '';
+      try {
+        final keys = asMap(jsonDecode(asString(j['ph']) ?? '{}')).keys.toList()..sort();
+        off = keys.join(',');
+      } on FormatException {
+        off = '';
+      }
+      if (off != s.offPerms()) changed = true;
+    }
+    final pv = asString(j['pv']) ?? '';
+    if (pv.isNotEmpty) {
+      if (_pv.isNotEmpty && pv != _pv) changed = true;
+      _pv = pv;
+    }
+    if (asInt(j['mt']) == 1) changed = true; // manutenzione accesa dal pannello
+    final unseen = asInt(j['unseen']) ?? -1;
+    if (unseen > unseenMessages().length) changed = true;
+    if (changed || _clock.elapsedMilliseconds - _lastRegister > 20 * 60000) await refreshPanel();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Riproduzione (lettore nativo)
+
+  /// Apre il lettore. Restituisce un messaggio se la visione non è consentita.
+  Future<String?> play(List<PlaybackItem> items, int index, {Duration? resumeAt}) async {
+    if (items.isEmpty) return null;
+    final i = index < 0 ? 0 : (index >= items.length ? items.length - 1 : index);
+    final item = items[i];
+    final panel = _panel;
+    if (panel != null && (_state?.account?.maxStreams ?? 0) > 0) {
+      final block = await panel.stream(item.watchState, item.title);
+      if (block != null) return block;
+    }
+    _playing = items;
+    _watching = _Watch.of(item);
+    _playerVisible = true;
+    unawaited(_beat(true));
+    Map<String, dynamic>? result;
+    try {
+      result = await NativeBridge.play({
+        'items': [for (final p in items) p.toPlayerJson()],
+        'index': i,
+        'resumeMs': resumeAt?.inMilliseconds ?? 0,
+        'ua': net.userAgent,
+        'lite': lite,
+      });
+    } on PlatformException catch (e) {
+      return e.message ?? 'Lettore non disponibile';
+    } finally {
+      _watching = null;
+      _playerVisible = false;
+    }
+    for (final raw in asList(result?['updates'])) {
+      final m = asMap(raw);
+      final key = asString(m['key']);
+      final played = key == null ? null : _findPlaying(key);
+      if (played == null) continue;
+      saveProgress(played, Duration(milliseconds: asInt(m['pos']) ?? 0), Duration(milliseconds: asInt(m['dur']) ?? 0), notify: false);
+    }
+    _playing = const <PlaybackItem>[];
+    progressRevision.value++;
+    _lastBeat = -1; // si torna a «nessuna visione» subito
+    unawaited(_beat(true));
+    final deferred = _deferredState;
+    if (deferred != null) {
+      _deferredState = null;
+      await _applyState(deferred);
+    }
+    return null;
+  }
+
+  PlaybackItem? _findPlaying(String key) {
+    for (final p in _playing) {
+      if (p.key == key) return p;
+    }
+    return null;
+  }
+
+  void _onPlayerEvent(PlayerEvent e) {
+    switch (e.type) {
+      case 'playing':
+        {
+          final item = _findPlaying(e.key);
+          if (item != null) {
+            _watching = _Watch.of(item);
+            unawaited(_beat(true));
+          }
+        }
+      case 'progress':
+        {
+          final item = _findPlaying(e.key);
+          if (item != null && e.duration > 0) {
+            saveProgress(item, Duration(milliseconds: e.position), Duration(milliseconds: e.duration), notify: false);
+          }
+        }
+      case 'background':
+        _playerVisible = false;
+      case 'foreground':
+        _playerVisible = true;
+    }
+  }
+
+  Future<void> setLiveFormat(String format) async {
+    liveFormat.value = format;
+    await _store.saveLiveFormat(format);
+  }
+
+  String urlFor(MediaItem item) => _source?.urlFor(item, liveFormat: liveFormat.value) ?? '';
+
+  /// Indirizzo salvato (es. «Continua a guardare») riportato al server e all'utente attuali:
+  /// se il pannello cambia DNS o credenziali la visione riparte lo stesso.
+  String currentUrl(String url) {
+    final acc = _account;
+    if (acc == null || acc.type != AccountType.xtream) return url;
+    final uri = Uri.tryParse(url);
+    if (uri == null || uri.pathSegments.length < 4) return url;
+    final kind = uri.pathSegments.first;
+    if (kind != 'live' && kind != 'movie' && kind != 'series') return url;
+    final u = Uri.encodeComponent(acc.username ?? '');
+    final p = Uri.encodeComponent(acc.password ?? '');
+    return '${acc.server}/$kind/$u/$p/${uri.pathSegments.last}';
+  }
+
+  PlaybackItem playbackForChannel(MediaItem channel) {
+    final url = urlFor(channel);
+    final alt = <String>[];
+    if (_account?.type == AccountType.xtream) {
+      final other = liveFormat.value == 'm3u8' ? 'ts' : 'm3u8';
+      final second = _source?.urlFor(channel, liveFormat: other) ?? '';
+      if (second.isNotEmpty && second != url) alt.add(second);
+    }
+    final cat = catalog.value?.categoryName(MediaKind.live, channel.categoryId) ?? '';
+    return PlaybackItem(
+      key: channel.key,
+      title: channel.name,
+      subtitle: cat.isEmpty ? null : cat,
+      url: url,
+      image: channel.image,
+      isLive: true,
+      kind: MediaKind.live,
+      channel: channel,
+      altUrls: alt,
+      epgUrl: _source?.epgUrlFor(channel),
+      group: cat,
+    );
+  }
+
+  List<PlaybackItem> livePlaylist(List<MediaItem> channels) => [for (final c in channels) playbackForChannel(c)];
+
+  PlaybackItem playbackForMovie(MediaItem movie) => PlaybackItem(
+        key: movie.key,
+        title: movie.name,
+        subtitle: movie.year,
+        url: urlFor(movie),
+        image: movie.backdrop ?? movie.image,
+        kind: MediaKind.movie,
+      );
+
+  PlaybackItem playbackForEpisode(MediaItem series, Episode episode) => PlaybackItem(
+        key: episode.key,
+        title: series.name,
+        subtitle: 'S${episode.season} E${episode.number} · ${episode.title}',
+        url: _source?.episodeUrl(episode) ?? '',
+        image: episode.image ?? series.backdrop ?? series.image,
+        kind: MediaKind.series,
+      );
+
+  /// Elemento di «Continua a guardare» pronto da riprodurre con l'indirizzo attuale.
+  PlaybackItem resumable(PlaybackItem saved) => PlaybackItem(
+        key: saved.key,
+        title: saved.title,
+        subtitle: saved.subtitle,
+        url: currentUrl(saved.url),
+        image: saved.image,
+        kind: saved.kind,
+      );
 
   // ---------------------------------------------------------------------------
   // Preferiti
@@ -201,7 +761,7 @@ class AppController {
       _progress.values.toList()..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
 
   /// [notify] a false durante la riproduzione: si salva su disco senza
-  /// ridisegnare le schermate sotto al player.
+  /// ridisegnare le schermate sotto al lettore.
   void saveProgress(PlaybackItem item, Duration position, Duration duration, {bool notify = true}) {
     if (item.isLive || duration.inSeconds < 60) return;
     final fraction = position.inMilliseconds / duration.inMilliseconds;
@@ -209,7 +769,14 @@ class AppController {
       _progress.remove(item.key); // finito o appena iniziato
     } else {
       _progress[item.key] = WatchProgress(
-        item: item,
+        item: PlaybackItem(
+          key: item.key,
+          title: item.title,
+          subtitle: item.subtitle,
+          url: item.url,
+          image: item.image,
+          kind: item.kind,
+        ),
         positionMs: position.inMilliseconds,
         durationMs: duration.inMilliseconds,
         updatedAt: DateTime.now().millisecondsSinceEpoch,
@@ -267,51 +834,18 @@ class AppController {
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Riproduzione
-
-  Future<void> setLiveFormat(String format) async {
-    liveFormat.value = format;
-    await _store.saveLiveFormat(format);
-  }
-
-  String urlFor(MediaItem item) => _source?.urlFor(item, liveFormat: liveFormat.value) ?? '';
-
-  PlaybackItem playbackForChannel(MediaItem channel) => PlaybackItem(
-        key: channel.key,
-        title: channel.name,
-        subtitle: channel.number == null ? null : 'Canale ${channel.number}',
-        url: urlFor(channel),
-        image: channel.image,
-        isLive: true,
-        channel: channel,
-      );
-
-  List<PlaybackItem> livePlaylist(List<MediaItem> channels) =>
-      [for (final c in channels) playbackForChannel(c)];
-
-  PlaybackItem playbackForMovie(MediaItem movie) => PlaybackItem(
-        key: movie.key,
-        title: movie.name,
-        subtitle: movie.year,
-        url: urlFor(movie),
-        image: movie.backdrop ?? movie.image,
-      );
-
-  PlaybackItem playbackForEpisode(MediaItem series, Episode episode) => PlaybackItem(
-        key: episode.key,
-        title: series.name,
-        subtitle: 'S${episode.season} E${episode.number} · ${episode.title}',
-        url: _source?.episodeUrl(episode) ?? '',
-        image: episode.image ?? series.backdrop ?? series.image,
-      );
-
   void dispose() {
+    _activationTimer?.cancel();
+    _stopPulse();
+    _lifecycle?.dispose();
+    unawaited(_playerSub?.cancel());
     status.dispose();
+    activation.dispose();
+    panelState.dispose();
     catalog.dispose();
-    accountInfo.dispose();
     liveFormat.dispose();
     favoritesRevision.dispose();
     progressRevision.dispose();
+    notice.dispose();
   }
 }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../app/brand.dart';
 import 'tv_focusable.dart';
 
 /// Pulsante per TV: bianco con testo nero quando è selezionato.
@@ -12,6 +13,8 @@ class TvButton extends StatelessWidget {
     this.autofocus = false,
     this.focusNode,
     this.selected = false,
+    this.primary = false,
+    this.expand = false,
   });
 
   final String label;
@@ -23,9 +26,14 @@ class TvButton extends StatelessWidget {
   /// Evidenzia il pulsante attivo in un gruppo (es. la stagione scelta).
   final bool selected;
 
+  /// Pulsante principale (colore del marchio quando non è selezionato).
+  final bool primary;
+
+  /// Occupa tutta la larghezza disponibile.
+  final bool expand;
+
   @override
   Widget build(BuildContext context) {
-    final accent = Theme.of(context).colorScheme.primary;
     return TvFocusable(
       focusNode: focusNode,
       autofocus: autofocus,
@@ -34,21 +42,28 @@ class TvButton extends StatelessWidget {
         final foreground = focused ? Colors.black : Colors.white;
         final background = focused
             ? Colors.white
-            : (selected ? accent.withValues(alpha: 0.35) : const Color(0x26FFFFFF));
+            : (primary
+                ? Brand.accentDeep
+                : (selected ? Brand.accent.withValues(alpha: 0.35) : const Color(0x26FFFFFF)));
         return AnimatedContainer(
-          duration: const Duration(milliseconds: 120),
+          duration: const Duration(milliseconds: 110),
           padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
           decoration: BoxDecoration(color: background, borderRadius: BorderRadius.circular(6)),
           child: Row(
-            mainAxisSize: MainAxisSize.min,
+            mainAxisSize: expand ? MainAxisSize.max : MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
               if (icon != null) ...[
                 Icon(icon, size: 18, color: foreground),
                 const SizedBox(width: 8),
               ],
-              Text(
-                label,
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: foreground),
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, height: 1.2, color: foreground),
+                ),
               ),
             ],
           ),
@@ -58,22 +73,25 @@ class TvButton extends StatelessWidget {
   }
 }
 
-/// Stile dei campi di testo, ben visibili quando sono selezionati.
-InputDecoration tvInputDecoration({String? label, String? hint, IconData? icon}) {
+/// Stile dei campi di testo: bordo bianco quando sono selezionati, viola mentre si scrive.
+InputDecoration tvInputDecoration({String? label, String? hint, IconData? icon, bool focused = false, bool editing = false}) {
+  final color = editing ? Brand.accent : Colors.white;
   return InputDecoration(
     labelText: label,
     hintText: hint,
-    prefixIcon: icon == null ? null : Icon(icon),
+    hintStyle: const TextStyle(color: Color(0x80FFFFFF)),
+    prefixIcon: icon == null ? null : Icon(icon, color: focused || editing ? Colors.white : const Color(0x99FFFFFF)),
     filled: true,
-    fillColor: const Color(0x1AFFFFFF),
+    fillColor: focused || editing ? const Color(0x26FFFFFF) : const Color(0x14FFFFFF),
     contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+    counterText: '',
     enabledBorder: OutlineInputBorder(
       borderRadius: BorderRadius.circular(8),
-      borderSide: const BorderSide(color: Color(0x33FFFFFF)),
+      borderSide: focused ? BorderSide(color: color, width: 2) : const BorderSide(color: Color(0x33FFFFFF)),
     ),
     focusedBorder: OutlineInputBorder(
       borderRadius: BorderRadius.circular(8),
-      borderSide: const BorderSide(color: Colors.white, width: 2),
+      borderSide: BorderSide(color: color, width: 2),
     ),
   );
 }

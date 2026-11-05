@@ -15,6 +15,8 @@ class NetImage extends StatelessWidget {
     this.alignment = Alignment.center,
     this.decodeWidth,
     this.showTitleOnFallback = true,
+    this.transparentPlaceholder = false,
+    this.fallback = true,
   });
 
   final String? url;
@@ -26,10 +28,18 @@ class NetImage extends StatelessWidget {
   final double? decodeWidth;
   final bool showTitleOnFallback;
 
+  /// Nessun riquadro colorato mentre l'immagine arriva (sfondi grandi).
+  final bool transparentPlaceholder;
+
+  /// Copertina generata se l'immagine non c'è.
+  final bool fallback;
+
   @override
   Widget build(BuildContext context) {
     final u = url;
-    if (u == null || u.isEmpty) return FallbackArt(title: title, showTitle: showTitleOnFallback);
+    if (u == null || u.isEmpty || !(u.startsWith('http://') || u.startsWith('https://'))) {
+      return fallback ? FallbackArt(title: title, showTitle: showTitleOnFallback) : const SizedBox.shrink();
+    }
     final width = decodeWidth;
     final cacheWidth = width == null ? null : (width * MediaQuery.devicePixelRatioOf(context)).round();
     return CachedNetworkImage(
@@ -38,10 +48,13 @@ class NetImage extends StatelessWidget {
       alignment: alignment,
       memCacheWidth: cacheWidth,
       filterQuality: FilterQuality.low,
-      fadeInDuration: const Duration(milliseconds: 180),
-      fadeOutDuration: const Duration(milliseconds: 80),
-      placeholder: (context, url) => const ColoredBox(color: Brand.card),
-      errorWidget: (context, url, error) => FallbackArt(title: title, showTitle: showTitleOnFallback),
+      fadeInDuration: const Duration(milliseconds: 160),
+      fadeOutDuration: Duration.zero,
+      placeholder: (context, url) =>
+          transparentPlaceholder ? const SizedBox.expand() : const ColoredBox(color: Brand.card),
+      errorWidget: (context, url, error) => fallback
+          ? FallbackArt(title: title, showTitle: showTitleOnFallback)
+          : const SizedBox.shrink(),
     );
   }
 }
@@ -55,7 +68,11 @@ class FallbackArt extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hue = (title.hashCode % 360).toDouble();
+    var hash = 0;
+    for (final unit in title.codeUnits) {
+      hash = (hash * 31 + unit) & 0x7fffffff;
+    }
+    final hue = (hash % 360).toDouble();
     final top = HSLColor.fromAHSL(1, hue, 0.45, 0.30).toColor();
     final bottom = HSLColor.fromAHSL(1, (hue + 35) % 360, 0.50, 0.14).toColor();
     return DecoratedBox(

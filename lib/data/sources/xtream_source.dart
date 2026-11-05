@@ -169,6 +169,10 @@ class XtreamSource extends ContentSource {
   }
 
   @override
+  String? epgUrlFor(MediaItem channel) =>
+      _api({'action': 'get_short_epg', 'stream_id': channel.id, 'limit': '4'}).toString();
+
+  @override
   String urlFor(MediaItem item, {String liveFormat = 'ts'}) {
     final u = Uri.encodeComponent(_user);
     final p = Uri.encodeComponent(_pass);

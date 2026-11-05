@@ -22,7 +22,7 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   final ValueNotifier<HeroData?> _hero = ValueNotifier(null);
-  final Debouncer _heroDebounce = Debouncer(const Duration(milliseconds: 160));
+  final Debouncer _heroDebounce = Debouncer(const Duration(milliseconds: 120));
 
   @override
   void initState() {
@@ -57,14 +57,16 @@ class _HomePageState extends State<HomePage> {
       valueListenable: app.catalog,
       builder: (context, catalog, child) {
         if (catalog == null) return const SizedBox.shrink();
-        return ListenableBuilder(
-          listenable: Listenable.merge([app.favoritesRevision, app.progressRevision]),
-          builder: (context, child) => Column(
-            children: [
-              HeroHeader(data: _hero),
-              Expanded(child: _rows(app, catalog)),
-            ],
-          ),
+        return Column(
+          children: [
+            HeroHeader(data: _hero),
+            Expanded(
+              child: ListenableBuilder(
+                listenable: Listenable.merge([app.favoritesRevision, app.progressRevision]),
+                builder: (context, child) => _rows(app, catalog),
+              ),
+            ),
+          ],
         );
       },
     );
@@ -72,6 +74,7 @@ class _HomePageState extends State<HomePage> {
 
   Widget _rows(AppController app, Catalog catalog) {
     final rows = <RowSpec>[];
+    // il primo elemento della prima fila è il punto d'ingresso dalla barra laterale
     FocusNode? entry = widget.entryNode;
     FocusNode? takeEntry() {
       final node = entry;
@@ -79,12 +82,14 @@ class _HomePageState extends State<HomePage> {
       return node;
     }
 
-    void addPosterRow(String title, List<MediaItem> items) {
+    void addPosterRow(String id, String title, List<MediaItem> items) {
       if (items.isEmpty) return;
       final node = takeEntry();
       rows.add(RowSpec(
+        id: id,
         height: Layout.posterRowHeight,
         builder: (context, onRowFocused) => ContentRow(
+          storageId: id,
           title: title,
           itemCount: items.length,
           itemExtent: Layout.posterExtent,
@@ -93,9 +98,9 @@ class _HomePageState extends State<HomePage> {
           itemBuilder: (context, i, onFocused) {
             final item = items[i];
             return PosterCard(
+              key: ValueKey<String>(item.key),
               item: item,
               focusNode: i == 0 ? node : null,
-              autofocus: i == 0 && node != null,
               onFocused: () {
                 onFocused();
                 _showHero(HeroData.fromItem(item));
@@ -107,12 +112,14 @@ class _HomePageState extends State<HomePage> {
       ));
     }
 
-    void addChannelRow(String title, List<MediaItem> channels) {
+    void addChannelRow(String id, String title, List<MediaItem> channels) {
       if (channels.isEmpty) return;
       final node = takeEntry();
       rows.add(RowSpec(
+        id: id,
         height: Layout.wideRowHeight,
         builder: (context, onRowFocused) => ContentRow(
+          storageId: id,
           title: title,
           itemCount: channels.length,
           itemExtent: Layout.wideExtent,
@@ -121,12 +128,12 @@ class _HomePageState extends State<HomePage> {
           itemBuilder: (context, i, onFocused) {
             final channel = channels[i];
             return WideCard(
+              key: ValueKey<String>(channel.key),
               title: channel.name,
               subtitle: channel.number == null ? null : 'Canale ${channel.number}',
               image: channel.image,
               isLogo: true,
               focusNode: i == 0 ? node : null,
-              autofocus: i == 0 && node != null,
               onFocused: () {
                 onFocused();
                 _showHero(HeroData.fromItem(
@@ -145,8 +152,10 @@ class _HomePageState extends State<HomePage> {
     if (resume.isNotEmpty) {
       final node = takeEntry();
       rows.add(RowSpec(
+        id: 'riprendi',
         height: Layout.wideRowHeight,
         builder: (context, onRowFocused) => ContentRow(
+          storageId: 'riprendi',
           title: 'Continua a guardare',
           itemCount: resume.length,
           itemExtent: Layout.wideExtent,
@@ -155,39 +164,39 @@ class _HomePageState extends State<HomePage> {
           itemBuilder: (context, i, onFocused) {
             final progress = resume[i];
             return WideCard(
+              key: ValueKey<String>(progress.item.key),
               title: progress.item.title,
               subtitle: progress.item.subtitle,
               image: progress.item.image,
               progress: progress.fraction,
               focusNode: i == 0 ? node : null,
-              autofocus: i == 0 && node != null,
               onFocused: () {
                 onFocused();
                 _showHero(HeroData.fromProgress(progress));
               },
-              onSelect: () => playItems(context, [progress.item], 0, resumeAt: progress.position),
+              onSelect: () => playItems(context, [app.resumable(progress.item)], 0, resumeAt: progress.position),
             );
           },
         ),
       ));
     }
 
-    addPosterRow('La mia lista', [
+    addPosterRow('lista', 'La mia lista', [
       ...app.favoriteItems(MediaKind.movie),
       ...app.favoriteItems(MediaKind.series),
     ]);
-    addChannelRow('I tuoi canali', app.favoriteItems(MediaKind.live));
-    addPosterRow('Film aggiunti di recente', catalog.recentMovies);
-    addPosterRow('Serie aggiunte di recente', catalog.recentSeries);
+    addChannelRow('canali', 'I tuoi canali', app.favoriteItems(MediaKind.live));
+    addPosterRow('film-nuovi', 'Film aggiunti di recente', catalog.recentMovies);
+    addPosterRow('serie-nuove', 'Serie aggiunte di recente', catalog.recentSeries);
     if (catalog.liveCategories.isNotEmpty) {
       final first = catalog.liveCategories.first;
-      addChannelRow('In diretta · ${first.name}', catalog.inCategory(MediaKind.live, first.id));
+      addChannelRow('diretta:${first.id}', 'In diretta · ${first.name}', catalog.inCategory(MediaKind.live, first.id));
     }
     for (final category in catalog.movieCategories.take(4)) {
-      addPosterRow(category.name, catalog.inCategory(MediaKind.movie, category.id));
+      addPosterRow('film:${category.id}', category.name, catalog.inCategory(MediaKind.movie, category.id));
     }
     for (final category in catalog.seriesCategories.take(2)) {
-      addPosterRow(category.name, catalog.inCategory(MediaKind.series, category.id));
+      addPosterRow('serie:${category.id}', category.name, catalog.inCategory(MediaKind.series, category.id));
     }
 
     if (rows.isEmpty) {

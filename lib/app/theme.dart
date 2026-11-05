@@ -6,7 +6,7 @@ ThemeData buildTheme() {
   final scheme = ColorScheme.fromSeed(
     seedColor: Brand.accent,
     brightness: Brightness.dark,
-  ).copyWith(primary: Brand.accent, surface: Brand.surface);
+  ).copyWith(primary: Brand.accent, secondary: Brand.accentDeep, surface: Brand.surface);
 
   return ThemeData(
     useMaterial3: true,
@@ -17,16 +17,25 @@ ThemeData buildTheme() {
     highlightColor: Colors.transparent,
     hoverColor: Colors.transparent,
     focusColor: Colors.transparent,
+    textSelectionTheme: const TextSelectionThemeData(
+      cursorColor: Brand.accent,
+      selectionColor: Color(0x66A855F7),
+      selectionHandleColor: Brand.accent,
+    ),
+    progressIndicatorTheme: const ProgressIndicatorThemeData(color: Brand.accent),
   );
 }
 
 /// Misure pensate per lo schermo TV "logico": Fire TV e Android TV usano
 /// densità 2.0, quindi un televisore Full HD vale 960×540 punti.
+/// I margini tengono testi e pulsanti lontani dai bordi (TV che tagliano l'immagine).
 abstract final class Layout {
-  static const double railWidth = 64;
-  static const double railExpandedWidth = 210;
-  static const double pagePadding = 28;
-  static const double safeTop = 22;
+  static const double railWidth = 72;
+  static const double railExpandedWidth = 220;
+  static const double pagePadding = 32;
+  static const double pageRight = 40;
+  static const double safeTop = 24;
+  static const double safeBottom = 20;
 
   static const double posterWidth = 112;
   static const double posterHeight = 168;
@@ -35,14 +44,14 @@ abstract final class Layout {
   static const double wideWidth = 192;
   static const double wideHeight = 108;
   static const double wideExtent = 208;
-  static const double wideCardHeight = wideHeight + 6 + 18 + 15;
+  static const double wideCardHeight = wideHeight + 6 + 18 + 16;
 
-  static const double rowTitleHeight = 24;
+  static const double rowTitleHeight = 26;
   static const double rowPadding = 12;
   static const double posterRowHeight = rowTitleHeight + posterHeight + rowPadding * 2;
   static const double wideRowHeight = rowTitleHeight + wideCardHeight + rowPadding * 2;
 
-  static const double heroHeight = 196;
+  static const double heroHeight = 188;
 }
 
 abstract final class AppText {
@@ -55,11 +64,13 @@ abstract final class AppText {
   static const TextStyle title = TextStyle(
     fontSize: 20,
     fontWeight: FontWeight.w700,
+    height: 1.2,
     color: Colors.white,
   );
   static const TextStyle rowTitle = TextStyle(
     fontSize: 15,
     fontWeight: FontWeight.w700,
+    height: 1.2,
     color: Colors.white,
   );
   static const TextStyle body = TextStyle(
@@ -70,10 +81,12 @@ abstract final class AppText {
   static const TextStyle meta = TextStyle(
     fontSize: 12,
     fontWeight: FontWeight.w600,
+    height: 1.25,
     color: Color(0xB3FFFFFF),
   );
   static const TextStyle small = TextStyle(
     fontSize: 11,
+    height: 1.25,
     color: Color(0x99FFFFFF),
   );
 }

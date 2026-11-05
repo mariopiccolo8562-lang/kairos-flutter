@@ -34,26 +34,57 @@ jobs:
       - name: Test
         run: flutter test
 
+      # Chiave di firma definitiva (come Kairos Lite e Kairos TV): segreti ANDROID_KEYSTORE_B64,
+      # ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD. Senza, firma di anteprima.
+      - name: Chiave di firma
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "KS_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+            echo "Firma con la chiave definitiva"
+          else
+            echo "::warning::Nessuna chiave definitiva nei segreti: APK firmato con la chiave di anteprima"
+          fi
+
       # Versione 0.1.N: N cresce a ogni compilazione, così lo store
-      # riconosce sempre la versione più recente.
+      # riconosce sempre la versione più recente. Solo ARM (Fire TV, Android TV, telefoni).
       - name: Compilazione APK
+        env:
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           flutter build apk --release \
+            --target-platform android-arm,android-arm64 \
             --build-name=0.1.${{ github.run_number }} \
             --build-number=${{ github.run_number }}
-          cp build/app/outputs/flutter-apk/app-release.apk kairos-flutter.apk
+          cp build/app/outputs/flutter-apk/app-release.apk kairos-plus.apk
+          ls -l kairos-plus.apk
+
+      # File letto dal pannello Kairos per sapere qual è l'ultima versione di Kairos Plus
+      - name: Versione per il pannello
+        run: |
+          V="0.1.${{ github.run_number }}"
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${V}/kairos-plus.apk"
+          jq -n --arg v "$V" --argjson c ${{ github.run_number }} --arg u "$URL" --arg d "$(date -u +%FT%TZ)" \
+            '{version:$v, versionCode:$c, url:$u, date:$d}' > kairos-plus.json
+          cat kairos-plus.json
 
       - uses: actions/upload-artifact@v4
         with:
-          name: kairos-flutter-apk
-          path: kairos-flutter.apk
+          name: kairos-plus-apk
+          path: kairos-plus.apk
 
       # Release pubblica: l'ultima versione ha sempre lo stesso link, usato dal Kairos Store:
-      # https://github.com/mariopiccolo8562-lang/kairos-flutter/releases/latest/download/kairos-flutter.apk
+      # https://github.com/mariopiccolo8562-lang/kairos-flutter/releases/latest/download/kairos-plus.apk
       - name: Pubblicazione (link fisso per il Kairos Store)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v0.1.${{ github.run_number }}
-          name: Kairos Flutter 0.1.${{ github.run_number }}
-          files: kairos-flutter.apk
+          name: Kairos Plus 0.1.${{ github.run_number }}
+          files: |
+            kairos-plus.apk
+            kairos-plus.json
           make_latest: true

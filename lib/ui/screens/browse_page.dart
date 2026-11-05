@@ -24,7 +24,7 @@ class BrowsePage extends StatefulWidget {
 
 class _BrowsePageState extends State<BrowsePage> {
   final ValueNotifier<HeroData?> _hero = ValueNotifier(null);
-  final Debouncer _heroDebounce = Debouncer(const Duration(milliseconds: 160));
+  final Debouncer _heroDebounce = Debouncer(const Duration(milliseconds: 120));
 
   @override
   void initState() {
@@ -54,14 +54,16 @@ class _BrowsePageState extends State<BrowsePage> {
       valueListenable: app.catalog,
       builder: (context, catalog, child) {
         if (catalog == null) return const SizedBox.shrink();
-        return ValueListenableBuilder<int>(
-          valueListenable: app.favoritesRevision,
-          builder: (context, revision, child) => Column(
-            children: [
-              HeroHeader(data: _hero),
-              Expanded(child: _rows(app, catalog)),
-            ],
-          ),
+        return Column(
+          children: [
+            HeroHeader(data: _hero),
+            Expanded(
+              child: ValueListenableBuilder<int>(
+                valueListenable: app.favoritesRevision,
+                builder: (context, revision, child) => _rows(app, catalog),
+              ),
+            ),
+          ],
         );
       },
     );
@@ -70,14 +72,17 @@ class _BrowsePageState extends State<BrowsePage> {
   Widget _rows(AppController app, Catalog catalog) {
     final rows = <RowSpec>[];
     FocusNode? entry = widget.entryNode;
+    final prefix = widget.kind == MediaKind.movie ? 'film' : 'serie';
 
-    void addRow(String title, List<MediaItem> items) {
+    void addRow(String id, String title, List<MediaItem> items) {
       if (items.isEmpty) return;
       final node = entry;
       entry = null;
       rows.add(RowSpec(
+        id: id,
         height: Layout.posterRowHeight,
         builder: (context, onRowFocused) => ContentRow(
+          storageId: '$prefix:$id',
           title: title,
           itemCount: items.length,
           itemExtent: Layout.posterExtent,
@@ -86,9 +91,9 @@ class _BrowsePageState extends State<BrowsePage> {
           itemBuilder: (context, i, onFocused) {
             final item = items[i];
             return PosterCard(
+              key: ValueKey<String>(item.key),
               item: item,
               focusNode: i == 0 ? node : null,
-              autofocus: i == 0 && node != null,
               onFocused: () {
                 onFocused();
                 _showHero(item);
@@ -100,9 +105,9 @@ class _BrowsePageState extends State<BrowsePage> {
       ));
     }
 
-    addRow('La mia lista', app.favoriteItems(widget.kind));
+    addRow('lista', 'La mia lista', app.favoriteItems(widget.kind));
     for (final category in catalog.categories(widget.kind)) {
-      addRow(category.name, catalog.inCategory(widget.kind, category.id));
+      addRow('cat:${category.id}', category.name, catalog.inCategory(widget.kind, category.id));
     }
 
     if (rows.isEmpty) {

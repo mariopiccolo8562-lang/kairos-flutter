@@ -1,12 +1,15 @@
 import 'package:flutter/painting.dart';
 
-/// Identità del marchio. Per una versione "white label" basta cambiare questo file.
+/// Identità del marchio Kairos Plus. Per una versione "white label" basta cambiare questo file
+/// (e le icone in android/app/src/main/res e assets/brand).
 abstract final class Brand {
-  static const String appName = 'Kairos';
-  static const String version = 'Anteprima 0.1';
+  static const String appName = 'Kairos Plus';
+  static const String shortName = 'Kairos';
 
-  static const Color accent = Color(0xFF00B4FF);
-  static const Color background = Color(0xFF0A0A0F);
-  static const Color surface = Color(0xFF15151D);
-  static const Color card = Color(0xFF1B1B24);
+  /// Viola Kairos Plus (le altre app Kairos usano rosso, blu, arancio e ambra).
+  static const Color accent = Color(0xFFA855F7);
+  static const Color accentDeep = Color(0xFF7C3AED);
+  static const Color background = Color(0xFF0B0812);
+  static const Color surface = Color(0xFF16121F);
+  static const Color card = Color(0xFF1D1828);
 }

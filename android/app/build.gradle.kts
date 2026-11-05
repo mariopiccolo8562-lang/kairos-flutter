@@ -4,8 +4,14 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+fun env(name: String): String? = System.getenv(name)?.takeIf { it.isNotBlank() }
+
+// Chiave di firma definitiva: dai segreti di GitHub (come Kairos Lite e Kairos TV).
+// Se i segreti non ci sono si usa la chiave di ANTEPRIMA del repository.
+val releaseKeystore = env("KS_PATH")?.let { file(it) }?.takeIf { it.exists() }
+
 android {
-    namespace = "com.kairos.streaming_tv"
+    namespace = "com.kairos.plus"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -15,24 +21,14 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.kairos.streaming_tv"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
+        // Kairos Plus: app separata dalle altre app Kairos, si installa accanto a loro
+        applicationId = "com.kairos.plus"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
-        // Uses the version code from pubspec.yaml. When using split APKs, 1000 * ABI_VERSION
-        // is added automatically by Flutter. (https://developer.android.com/studio/build/configure-apk-splits#configure-APK-versions)
-        // You can force using the value of versionCode by specifying the `-P force-version-code-ignoring-abi=true`
-        // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
 
-    // Chiave di firma di ANTEPRIMA, uguale a ogni compilazione: così ogni nuova
-    // versione scaricata dallo store si installa sopra la precedente.
-    // Prima della distribuzione ai clienti va sostituita con la chiave definitiva
-    // (custodita nei segreti di GitHub, non nel repository).
     signingConfigs {
         getByName("debug") {
             storeFile = file("../keys/preview.jks")
@@ -40,12 +36,25 @@ android {
             keyAlias = "preview"
             keyPassword = "kairos-preview"
         }
+        create("release") {
+            if (releaseKeystore != null) {
+                storeFile = releaseKeystore
+                storePassword = env("KS_PASS")
+                keyAlias = env("KEY_ALIAS")
+                keyPassword = env("KEY_PASS")
+            }
+        }
     }
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (releaseKeystore != null) signingConfigs.getByName("release") else signingConfigs.getByName("debug")
         }
+    }
+
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
     }
 }
 
@@ -57,4 +66,11 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // lettore nativo: stessa versione collaudata di Kairos Lite e Kairos TV
+    implementation("androidx.media3:media3-exoplayer:1.4.1")
+    implementation("androidx.media3:media3-exoplayer-hls:1.4.1")
+    implementation("androidx.media3:media3-ui:1.4.1")
 }

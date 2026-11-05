@@ -125,7 +125,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
           ),
         ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(48, 30, 48, 12),
+          padding: const EdgeInsets.fromLTRB(48, 30, 48, 16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -295,6 +295,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
               listenable: _app.progressRevision,
               builder: (context, child) => ContentRow(
                 key: ValueKey<int>(season),
+                storageId: 'episodi:${widget.item.id}:$season',
                 title: 'Episodi · Stagione $season',
                 itemCount: episodes.length,
                 itemExtent: Layout.wideExtent,
@@ -305,6 +306,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
                   final runtime = formatRuntime(episode.durationSecs);
                   final progress = _app.progressFor(episode.key);
                   return WideCard(
+                    key: ValueKey<String>(episode.key),
                     title: 'E${episode.number} · ${episode.title}',
                     subtitle: runtime.isEmpty ? null : runtime,
                     image: episode.image ?? widget.item.backdrop ?? widget.item.image,

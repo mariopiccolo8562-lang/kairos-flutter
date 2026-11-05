@@ -4,6 +4,7 @@ import 'dart:isolate';
 
 import 'package:path_provider/path_provider.dart';
 
+import '../core/net.dart' as net;
 import 'models.dart';
 import 'sources/content_source.dart';
 
@@ -14,12 +15,13 @@ import 'sources/content_source.dart';
 abstract final class CatalogRepository {
   static Future<String> _cachePath() async {
     final dir = await getApplicationSupportDirectory();
-    return '${dir.path}${Platform.pathSeparator}catalog_v1.json';
+    return '${dir.path}${Platform.pathSeparator}catalog_v2.json';
   }
 
   static Future<Catalog> fetch(Account account) async {
     final path = await _cachePath();
-    return Isolate.run(() => _fetchAndStore(account, path));
+    final agent = net.userAgent;
+    return Isolate.run(() => _fetchAndStore(account, path, agent));
   }
 
   static Future<Catalog?> readCache() async {
@@ -33,7 +35,9 @@ abstract final class CatalogRepository {
   }
 }
 
-Future<Catalog> _fetchAndStore(Account account, String path) async {
+Future<Catalog> _fetchAndStore(Account account, String path, String agent) async {
+  // ogni isolate ha le sue variabili: il nome con cui l'app si presenta va ripassato
+  net.userAgent = agent;
   final catalog = await ContentSource.of(account).fetchCatalog();
   try {
     File(path).writeAsStringSync(jsonEncode(catalog.toJson()), flush: true);
