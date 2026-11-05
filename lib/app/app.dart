@@ -37,11 +37,7 @@ class _KairosPlusAppState extends State<KairosPlusApp> {
         title: Brand.appName,
         debugShowCheckedModeBanner: false,
         theme: buildTheme(),
-        // Il tasto centrale (OK) del telecomando invia "select": equivale a un clic.
-        shortcuts: <ShortcutActivator, Intent>{
-          ...WidgetsApp.defaultShortcuts,
-          const SingleActivator(LogicalKeyboardKey.select): const ActivateIntent(),
-        },
+        shortcuts: _shortcuts,
         builder: (context, child) {
           // Misure fisse da TV: la dimensione del testo di sistema non deve
           // ingrandire le scritte (testi tagliati, elementi sovrapposti).
@@ -59,6 +55,28 @@ class _KairosPlusAppState extends State<KairosPlusApp> {
     );
   }
 }
+
+/// Il tasto centrale (OK) del telecomando invia "select": equivale a un clic.
+/// Tenendolo premuto non deve ripetere il clic (si aprirebbero più schede una
+/// sopra l'altra): OK, Invio e Spazio valgono una volta sola per pressione.
+final Map<ShortcutActivator, Intent> _shortcuts = () {
+  final activate = <LogicalKeyboardKey>{
+    LogicalKeyboardKey.select,
+    LogicalKeyboardKey.enter,
+    LogicalKeyboardKey.numpadEnter,
+    LogicalKeyboardKey.gameButtonA,
+    LogicalKeyboardKey.space,
+  };
+  final map = <ShortcutActivator, Intent>{};
+  WidgetsApp.defaultShortcuts.forEach((activator, intent) {
+    if (activator is SingleActivator && activate.contains(activator.trigger)) return;
+    map[activator] = intent;
+  });
+  for (final key in activate) {
+    map[SingleActivator(key, includeRepeats: false)] = const ActivateIntent();
+  }
+  return map;
+}();
 
 /// Con le frecce Flutter sposterebbe il focus e farebbe "saltare" le liste.
 /// Qui spostiamo solo il focus: lo scorrimento animato lo gestiscono le
