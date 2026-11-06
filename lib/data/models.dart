@@ -15,6 +15,17 @@ String? yearFromTitle(String title) {
   return matches.last.group(1);
 }
 
+/// Contenuti per adulti: riconosciuti dal nome della categoria (e, per i titoli, dal nome stesso).
+/// Stesse regole dell'app Kairos Pro, così il controllo genitori si comporta allo stesso modo.
+final RegExp adultGroupRx = RegExp(
+    r'(\bxxx\b|adult|adulti|\bporn|erotic|erotik|hentai|\b18\s*\+|\+\s*18\b|\bvm\s*18\b|for adults|\bsexy?\b|\bhot\s*club\b|playboy|brazzers|private\s*tv)',
+    caseSensitive: false);
+final RegExp adultNameRx = RegExp(r'(\bxxx\b|\bporn|hentai|brazzers|playboy\s*tv|\b18\s*\+)', caseSensitive: false);
+bool isAdultText(String? s) => s != null && s.isNotEmpty && adultGroupRx.hasMatch(s);
+
+/// Finto titolo che occupa una fila protetta dal controllo genitori: aprendolo si inserisce il PIN.
+const String kPinItemId = '__pin__';
+
 class Category {
   const Category({required this.id, required this.name});
 
@@ -552,6 +563,13 @@ class Catalog {
     };
     return groups[categoryId] ?? const <MediaItem>[];
   }
+
+  final Map<String, bool> _adultCat = <String, bool>{};
+  /// Categoria per adulti (dal nome): il controllo genitori la protegge con il PIN.
+  bool isAdultCategory(MediaKind kind, String categoryId) =>
+      _adultCat.putIfAbsent('${kind.name}|$categoryId', () => isAdultText(categoryName(kind, categoryId)));
+  /// Titolo o canale per adulti: categoria per adulti, oppure nome esplicito.
+  bool isAdult(MediaItem x) => isAdultCategory(x.kind, x.categoryId) || adultNameRx.hasMatch(x.name);
 
   String categoryName(MediaKind kind, String categoryId) {
     for (final c in categories(kind)) {

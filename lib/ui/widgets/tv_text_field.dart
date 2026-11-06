@@ -26,6 +26,7 @@ class TvTextField extends StatefulWidget {
     this.maxLength,
     this.style,
     this.textAlign = TextAlign.start,
+    this.obscureText = false,
   });
 
   final TextEditingController controller;
@@ -43,6 +44,9 @@ class TvTextField extends StatefulWidget {
   final int? maxLength;
   final TextStyle? style;
   final TextAlign textAlign;
+
+  /// Testo nascosto (PIN).
+  final bool obscureText;
 
   /// True se [node] è un campo mentre si scrive (le frecce ◀▶ muovono il cursore).
   static bool isEditing(FocusNode? node) => node != null && _TvTextFieldState._byInner[node] != null;
@@ -130,6 +134,7 @@ class _TvTextFieldState extends State<TvTextField> {
             textInputAction: widget.textInputAction ?? TextInputAction.done,
             maxLength: widget.maxLength,
             textAlign: widget.textAlign,
+            obscureText: widget.obscureText,
             style: widget.style ?? const TextStyle(fontSize: 18, color: Colors.white),
             onChanged: widget.onChanged,
             onSubmitted: (value) {

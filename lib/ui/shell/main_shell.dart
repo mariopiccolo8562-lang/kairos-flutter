@@ -85,6 +85,10 @@ class _MainShellState extends State<MainShell> {
     Timer(const Duration(milliseconds: 900), () {
       if (mounted) _showUnseenMessages();
     });
+    // controllo genitori: al primo avvio si chiede di scegliere il PIN (quello iniziale è 0000)
+    Timer(const Duration(milliseconds: 2600), () {
+      if (mounted) unawaited(maybeAskParentalPin(context));
+    });
   }
 
   @override
@@ -122,6 +126,13 @@ class _MainShellState extends State<MainShell> {
 
   /// Il pannello ha chiesto di aprire le Impostazioni (controllo remoto).
   void _onRemoteCmd() {
+    if (_app.remoteCmd.value == 'pin' && mounted) {
+      // il fornitore ha riportato il PIN a 0000: si chiede subito di sceglierne uno nuovo
+      _app.remoteCmd.value = null;
+      unawaited(showTvMessage(context, title: 'Controllo genitori', message: 'Il tuo fornitore ha reimpostato il PIN del controllo genitori: ora è 0000.')
+          .then((_) => mounted ? maybeAskParentalPin(context, force: true) : null));
+      return;
+    }
     if (_app.remoteCmd.value != 'settings' || !mounted) return;
     _app.remoteCmd.value = null;
     Navigator.of(context).popUntil((r) => r.isFirst);

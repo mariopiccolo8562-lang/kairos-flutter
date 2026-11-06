@@ -127,6 +127,48 @@ class AppController {
   bool get bgUpdate => imposed('bgupd') ? _rc['bgupd'].toString() == 'on' : _bgUpdate;
   String _previewMode = 'click';
   int _previewSeq = 0;
+
+  // ---- controllo genitori: attivo di serie con il PIN 0000; al primo avvio si chiede di sceglierne uno proprio.
+  //      Il pannello può riportare il PIN a 0000 (comando «Reimposta PIN») se il cliente lo dimentica.
+  bool _parental = true;
+  String _pin = '';
+  int _pinLater = 0;
+  /// PIN già inserito in questa apertura: i contenuti protetti restano aperti fino alla chiusura.
+  bool parentalUnlocked = false;
+  /// Cresce quando il controllo genitori si sblocca o cambia: le pagine si ridisegnano.
+  final ValueNotifier<int> parentalRevision = ValueNotifier(0);
+  bool get parentalOn => _parental;
+  bool get pinIsDefault => _pin.isEmpty;
+  bool checkPin(String p) => p.trim() == (_pin.isEmpty ? '0000' : _pin);
+  /// Va chiesto di scegliere il PIN (primo avvio o PIN reimpostato; «Più tardi» rimanda al giorno dopo).
+  bool get pinAskDue => _parental && _pin.isEmpty && DateTime.now().millisecondsSinceEpoch - _pinLater > 86400000;
+  Future<void> setParental(bool on) async {
+    _parental = on;
+    parentalUnlocked = false;
+    await _store.saveParental(on);
+    parentalRevision.value++;
+  }
+  Future<void> setPin(String pin) async {
+    _pin = pin;
+    _pinLater = 0;
+    await _store.savePin(pin);
+    await _store.savePinLater(0);
+    parentalRevision.value++;
+  }
+  Future<void> postponePin() async {
+    _pinLater = DateTime.now().millisecondsSinceEpoch;
+    await _store.savePinLater(_pinLater);
+  }
+  void parentalUnlock() {
+    parentalUnlocked = true;
+    parentalRevision.value++;
+  }
+  bool parentalLockedCategory(MediaKind kind, String categoryId) =>
+      _parental && !parentalUnlocked && (catalog.value?.isAdultCategory(kind, categoryId) ?? false);
+  bool parentalLocked(MediaItem x) => _parental && !parentalUnlocked && (catalog.value?.isAdult(x) ?? false);
+  bool parentalLockedPlayback(PlaybackItem it) =>
+      _parental && !parentalUnlocked &&
+      ((it.channel != null && (catalog.value?.isAdult(it.channel!) ?? false)) || isAdultText(it.group) || adultNameRx.hasMatch(it.title));
   bool _inPlayer = false;
 
   /// Messaggio da mostrare se il catalogo non si è potuto caricare.
@@ -204,6 +246,9 @@ class AppController {
       _rcv = rcv;
     }
     _previewMode = await _store.loadPreviewMode();
+    _parental = await _store.loadParental();
+    _pin = await _store.loadPin();
+    _pinLater = await _store.loadPinLater();
     _applyLite();
 
     _favorites = await _store.loadFavorites();
@@ -958,6 +1003,11 @@ class AppController {
             final had = await NativeBridge.openInstallPerm();
             await panel.cmdAck(id, true, had ? 'permesso già concesso' : 'schermata del permesso aperta sulla TV');
           }
+        case 'pin':
+          await setPin('');
+          parentalUnlocked = false;
+          await panel.cmdAck(id, true, 'PIN riportato a 0000');
+          if (!watching) remoteCmd.value = 'pin';
         case 'exit':
           await panel.cmdAck(id, true, 'chiusa');
           remoteCmd.value = 'exit';

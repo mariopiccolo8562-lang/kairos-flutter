@@ -13,7 +13,9 @@ import 'widgets/tv_button.dart';
 import 'widgets/tv_focusable.dart';
 import 'widgets/tv_text_field.dart';
 
-Future<void> openDetails(BuildContext context, MediaItem item) {
+Future<void> openDetails(BuildContext context, MediaItem item) async {
+  if (!await parentalGate(context, item: item)) return;
+  if (item.id == kPinItemId || !context.mounted) return; // segnaposto di una fila protetta: dopo il PIN la fila si riempie da sola
   return Navigator.of(context).push(
     PageRouteBuilder<void>(
       transitionDuration: const Duration(milliseconds: 200),
@@ -35,6 +37,9 @@ Future<void> playItems(
 }) async {
   if (items.isEmpty) return;
   final app = AppScope.of(context);
+  final i = index < 0 ? 0 : (index >= items.length ? items.length - 1 : index);
+  if (!await parentalGate(context, playback: items[i])) return;
+  if (!context.mounted) return;
   final message = await app.play(items, index, resumeAt: resumeAt);
   if (message != null && context.mounted) {
     await showTvMessage(context, title: 'Visione non disponibile', message: message);
@@ -43,6 +48,125 @@ Future<void> playItems(
 
 /// Le finestre si aprono sopra l'interfaccia: il video dell'anteprima (nativo) si ferma prima.
 void _pausePreview(BuildContext context) => AppScope.of(context).stopPreview();
+
+// ---------------------------------------------------------------------------
+// Controllo genitori: attivo di serie con il PIN 0000 (al primo avvio si chiede di sceglierne uno proprio).
+
+/// Chiede il PIN di 4 cifre; null se annullato.
+Future<String?> showParentalPin(BuildContext context, {required String title, String hint = 'Inserisci il PIN di 4 cifre'}) {
+  final controller = TextEditingController();
+  return showDialog<String>(
+    context: context,
+    builder: (context) {
+      void submit() => Navigator.of(context).pop(controller.text.trim());
+      return _dialogFrame(
+        width: 420,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('CONTROLLO GENITORI', style: AppText.meta),
+            const SizedBox(height: 6),
+            Text(title, style: AppText.title),
+            const SizedBox(height: 8),
+            Text(hint, style: AppText.body),
+            const SizedBox(height: 16),
+            TvTextField(
+              controller: controller,
+              autofocus: true,
+              openOnStart: true,
+              keyboardType: TextInputType.number,
+              textInputAction: TextInputAction.done,
+              maxLength: 4,
+              obscureText: true,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w800, letterSpacing: 10, color: Colors.white),
+              hint: '····',
+              onSubmitted: (value) {
+                if (value.trim().length == 4) submit();
+              },
+            ),
+            const SizedBox(height: 18),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TvButton(label: 'Annulla', onPressed: () => Navigator.of(context).pop()),
+                const SizedBox(width: 12),
+                TvButton(label: 'OK', primary: true, onPressed: submit),
+              ],
+            ),
+          ],
+        ),
+      );
+    },
+  );
+}
+
+/// Contenuto, canale o categoria protetti: chiede il PIN una volta per apertura dell'app. True = si può procedere.
+Future<bool> parentalGate(BuildContext context, {MediaItem? item, PlaybackItem? playback, MediaKind? kind, String? categoryId}) async {
+  final app = AppScope.of(context);
+  final locked = item != null
+      ? app.parentalLocked(item)
+      : playback != null
+          ? app.parentalLockedPlayback(playback)
+          : (kind != null && categoryId != null && app.parentalLockedCategory(kind, categoryId));
+  if (!locked) return true;
+  _pausePreview(context);
+  final p = await showParentalPin(context, title: 'Contenuto protetto');
+  if (p == null || !context.mounted) return false;
+  if (app.checkPin(p)) {
+    app.parentalUnlock();
+    return true;
+  }
+  await showTvMessage(context, title: 'PIN errato', message: 'Il PIN non è giusto. Se lo hai dimenticato, chiedi al tuo fornitore di reimpostarlo.');
+  return false;
+}
+
+/// Scelta di un PIN nuovo (chiesto due volte). True se impostato.
+Future<bool> chooseParentalPin(BuildContext context) async {
+  final app = AppScope.of(context);
+  final a = await showParentalPin(context, title: 'Scegli un PIN di 4 cifre', hint: 'Lo userai per i contenuti protetti');
+  if (a == null || !context.mounted) return false;
+  if (a.length != 4 || int.tryParse(a) == null) {
+    await showTvMessage(context, title: 'PIN non valido', message: 'Il PIN deve avere 4 cifre.');
+    return false;
+  }
+  if (a == '0000') {
+    await showTvMessage(context, title: 'PIN non valido', message: '0000 è il PIN iniziale: scegline un altro.');
+    return false;
+  }
+  if (!context.mounted) return false;
+  final b = await showParentalPin(context, title: 'Ripeti il PIN', hint: 'Scrivilo di nuovo per conferma');
+  if (b == null || !context.mounted) return false;
+  if (a != b) {
+    await showTvMessage(context, title: 'PIN non valido', message: 'I due PIN non coincidono.');
+    return false;
+  }
+  await app.setPin(a);
+  return true;
+}
+
+/// Primo avvio (o PIN reimpostato dal fornitore): si propone di scegliere il proprio PIN; «Più tardi» rimanda al giorno dopo.
+bool _pinAskOpen = false;
+Future<void> maybeAskParentalPin(BuildContext context, {bool force = false}) async {
+  final app = AppScope.of(context);
+  if (_pinAskOpen || !(force ? (app.parentalOn && app.pinIsDefault) : app.pinAskDue)) return;
+  _pinAskOpen = true;
+  try {
+    final go = await showTvConfirm(context,
+        title: 'Controllo genitori',
+        message: 'Il controllo genitori è attivo: le categorie e i titoli per adulti chiedono un PIN. Ora il PIN è 0000: scegline uno tuo di 4 cifre.\n\nPuoi farlo anche dopo, da Impostazioni.',
+        confirmLabel: 'Scegli il PIN');
+    if (!context.mounted) return;
+    if (go) {
+      if (!await chooseParentalPin(context)) await app.postponePin();
+    } else {
+      await app.postponePin();
+    }
+  } finally {
+    _pinAskOpen = false;
+  }
+}
 
 Widget _dialogFrame({required Widget child, double width = 440}) {
   return Dialog(

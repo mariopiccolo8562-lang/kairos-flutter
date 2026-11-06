@@ -74,7 +74,8 @@ class _LivePageState extends State<LivePage> {
 
   List<MediaItem> _channels(AppController app, Catalog catalog, String id) {
     if (id == _favoritesId) return app.favoriteItems(MediaKind.live);
-    if (id == _allId) return catalog.live;
+    if (id == _allId) return catalog.live.where((c) => !app.parentalLocked(c)).toList();
+    if (app.parentalLockedCategory(MediaKind.live, id)) return const <MediaItem>[]; // protetta: OK sulla categoria chiede il PIN
     return catalog.inCategory(MediaKind.live, id);
   }
 
@@ -94,9 +95,15 @@ class _LivePageState extends State<LivePage> {
     });
   }
 
-  /// Con OK sulla categoria si entra subito nei canali.
+  /// Con OK sulla categoria si entra subito nei canali (se è protetta dal controllo genitori, prima il PIN).
   void _openCategory(String id) {
     _categoryDebounce.cancel();
+    if (_app.parentalLockedCategory(MediaKind.live, id)) {
+      unawaited(parentalGate(context, kind: MediaKind.live, categoryId: id).then((ok) {
+        if (ok && mounted) setState(() { _categoryId = id; _channelsKey = GlobalKey<_ChannelListState>(); });
+      }));
+      return;
+    }
     _setCategory(id);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _focusChannels();

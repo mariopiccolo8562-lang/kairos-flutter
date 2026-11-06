@@ -27,6 +27,9 @@ class UserStore {
   static const String _kRcv = 'rc_ver';
   static const String _kPreviewMode = 'preview_mode';
   static const String _kBgUpdate = 'bg_update';
+  static const String _kParental = 'parental_on';
+  static const String _kPin = 'parental_pin';
+  static const String _kPinLater = 'parental_pin_later';
   static const String _kUpdSeen = 'upd_seen';
   static const String _kUpdFirst = 'upd_first';
 
@@ -138,6 +141,14 @@ class UserStore {
   Future<bool> loadBgUpdate() async => await _prefs.getBool(_kBgUpdate) ?? true;
 
   Future<void> saveBgUpdate(bool on) => _prefs.setBool(_kBgUpdate, on);
+
+  /// Controllo genitori: attivo di serie; PIN vuoto = quello iniziale (0000); ultimo rinvio della scelta del PIN.
+  Future<bool> loadParental() async => await _prefs.getBool(_kParental) ?? true;
+  Future<void> saveParental(bool on) => _prefs.setBool(_kParental, on);
+  Future<String> loadPin() async => await _prefs.getString(_kPin) ?? '';
+  Future<void> savePin(String pin) => _prefs.setString(_kPin, pin);
+  Future<int> loadPinLater() async => await _prefs.getInt(_kPinLater) ?? 0;
+  Future<void> savePinLater(int t) => _prefs.setInt(_kPinLater, t);
 
   /// Ultima richiesta «Invia aggiornamento» del pannello già gestita.
   Future<int> loadUpdSeen() async => await _prefs.getInt(_kUpdSeen) ?? 0;

@@ -82,7 +82,8 @@ class _HomePageState extends State<HomePage> {
       return node;
     }
 
-    void addPosterRow(String id, String title, List<MediaItem> items) {
+    void addPosterRow(String id, String title, List<MediaItem> raw) {
+      final items = raw.where((x) => !app.parentalLocked(x)).toList(); // controllo genitori: in Home niente contenuti per adulti
       if (items.isEmpty) return;
       final node = takeEntry();
       rows.add(RowSpec(
@@ -112,7 +113,8 @@ class _HomePageState extends State<HomePage> {
       ));
     }
 
-    void addChannelRow(String id, String title, List<MediaItem> channels) {
+    void addChannelRow(String id, String title, List<MediaItem> rawChannels) {
+      final channels = rawChannels.where((x) => !app.parentalLocked(x)).toList();
       if (channels.isEmpty) return;
       final node = takeEntry();
       rows.add(RowSpec(

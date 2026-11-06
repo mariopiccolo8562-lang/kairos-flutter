@@ -214,6 +214,38 @@ class _SettingsPageState extends State<SettingsPage> {
               onSelect: _clearImages,
             ),
             const SizedBox(height: 12),
+            const _SectionTitle('Controllo genitori'),
+            _SettingTile(
+              title: 'Controllo genitori',
+              value: app.parentalOn ? 'Attivo: le categorie per adulti chiedono il PIN' : 'Spento',
+              onSelect: () async {
+                if (app.parentalOn) {
+                  final p = await showParentalPin(context, title: 'PIN per disattivare');
+                  if (p == null || !context.mounted) return;
+                  if (!app.checkPin(p)) { await showTvMessage(context, title: 'PIN errato', message: 'Il PIN non è giusto.'); return; }
+                  await app.setParental(false);
+                } else {
+                  await app.setParental(true);
+                  if (app.pinIsDefault && context.mounted) await chooseParentalPin(context);
+                }
+                if (mounted) setState(() {});
+              },
+            ),
+            _SettingTile(
+              title: 'PIN del controllo genitori',
+              value: app.pinIsDefault ? 'Ora è 0000: scegline uno tuo' : 'Cambia il PIN',
+              onSelect: () async {
+                if (!app.pinIsDefault) {
+                  final p = await showParentalPin(context, title: 'PIN attuale');
+                  if (p == null || !context.mounted) return;
+                  if (!app.checkPin(p)) { await showTvMessage(context, title: 'PIN errato', message: 'Il PIN non è giusto.'); return; }
+                }
+                if (!context.mounted) return;
+                await chooseParentalPin(context);
+                if (mounted) setState(() {});
+              },
+            ),
+            const SizedBox(height: 12),
             const _SectionTitle('Aggiornamenti'),
             ListenableBuilder(
               listenable: app.updater,

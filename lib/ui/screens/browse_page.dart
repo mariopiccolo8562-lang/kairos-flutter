@@ -51,7 +51,9 @@ class _BrowsePageState extends State<BrowsePage> {
   @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
-    return ValueListenableBuilder<Catalog?>(
+    return ValueListenableBuilder<int>(
+      valueListenable: app.parentalRevision,
+      builder: (context, _, __) => ValueListenableBuilder<Catalog?>(
       valueListenable: app.catalog,
       builder: (context, catalog, child) {
         if (catalog == null) return const SizedBox.shrink();
@@ -70,6 +72,7 @@ class _BrowsePageState extends State<BrowsePage> {
           ],
         );
       },
+    ),
     );
   }
 
@@ -111,6 +114,13 @@ class _BrowsePageState extends State<BrowsePage> {
 
     addRow('lista', 'La mia lista', app.favoriteItems(widget.kind));
     for (final category in catalog.categories(widget.kind)) {
+      if (app.parentalLockedCategory(widget.kind, category.id)) {
+        // categoria per adulti con il controllo genitori attivo: niente locandine, un solo riquadro che chiede il PIN
+        addRow('cat:${category.id}', '🔒 ${category.name}', [
+          MediaItem(kind: widget.kind, id: kPinItemId, name: 'Protetto · premi OK e inserisci il PIN', categoryId: category.id),
+        ]);
+        continue;
+      }
       addRow('cat:${category.id}', category.name, catalog.inCategory(widget.kind, category.id));
     }
 
