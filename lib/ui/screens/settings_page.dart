@@ -193,7 +193,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 builder: (context, format, child) => _SettingTile(
                   focusNode: formatNode,
                   title: 'Formato dei canali in diretta',
-                  value: format == 'm3u8' ? 'HLS (m3u8)' : 'MPEG-TS (consigliato)',
+                  value: (format == 'm3u8' ? 'HLS (m3u8)' : 'MPEG-TS (consigliato)') + (app.imposed('o.liveFmt') ? ' · scelto dal fornitore' : ''),
                   onSelect: () => app.setLiveFormat(format == 'm3u8' ? 'ts' : 'm3u8'),
                 ),
               ),

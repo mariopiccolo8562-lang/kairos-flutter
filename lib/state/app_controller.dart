@@ -148,6 +148,15 @@ class AppController {
 
   /// Anteprima dei canali attiva: 1° OK nel riquadro, 2° OK schermo intero.
   bool get previewEnabled => (imposed('preview') ? _rc['preview'].toString() : _previewMode) != 'off';
+
+  /// Formato dei canali in diretta imposto dal pannello (o.liveFmt: ts | hls), null = decide il cliente.
+  String? get _rcLiveFormat => switch (_rc['o.liveFmt']?.toString() ?? '') { 'ts' => 'ts', 'hls' => 'm3u8', _ => null };
+  /// Formato effettivo: quello del pannello se imposto, altrimenti quello scelto nelle Impostazioni.
+  void _applyLiveFormat() {
+    final v = _rcLiveFormat ?? _userLiveFormat;
+    if (liveFormat.value != v) liveFormat.value = v;
+  }
+  String _userLiveFormat = 'ts';
   String get deviceCode => _panel?.identity.code ?? '';
   String get appVersion => device.version.isEmpty ? '0.1' : device.version;
   Account? get account => _account;
@@ -199,7 +208,8 @@ class AppController {
 
     _favorites = await _store.loadFavorites();
     _progress = await _store.loadProgress();
-    liveFormat.value = await _store.loadLiveFormat();
+    _userLiveFormat = await _store.loadLiveFormat();
+    _applyLiveFormat();
     _seenMessages = await _store.loadSeenMessages();
     _playlistChoice = await _store.loadPlaylistChoice();
     _catalogSig = await _store.loadCatalogSignature();
@@ -873,6 +883,7 @@ class AppController {
         'liteOn': Perf.lite ? 'on' : 'off',
         'preview': previewEnabled ? 'click' : 'off',
         'bgupd': bgUpdate ? 'on' : 'off',
+        'o.liveFmt': liveFormat.value == 'm3u8' ? 'hls' : 'ts',
       };
 
   /// Aggiornamento in background: scelta del cliente (se il pannello non l'ha imposta).
@@ -897,6 +908,7 @@ class AppController {
     _rcv = rcv;
     await _store.saveRemote(raw, rcv);
     _applyLite();
+    _applyLiveFormat();
     if (!previewEnabled && previewBefore) stopPreview(release: true);
     uiRevision.value++;
     if (_updaterStarted) updater.onForeground(); // es. aggiornamento appena reso obbligatorio dal pannello
@@ -956,7 +968,9 @@ class AppController {
   }
 
   Future<void> setLiveFormat(String format) async {
-    liveFormat.value = format;
+    if (imposed('o.liveFmt')) return; // scelto dal fornitore
+    _userLiveFormat = format;
+    _applyLiveFormat();
     await _store.saveLiveFormat(format);
   }
 
