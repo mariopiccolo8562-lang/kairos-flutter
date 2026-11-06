@@ -27,7 +27,10 @@ class AppUpdater extends ChangeNotifier {
     required this.currentCode,
     required this.currentVersion,
     required this.backgroundEnabled,
+    required this.forceDays,
     required this.watching,
+    required this.loadFirstSeen,
+    required this.saveFirstSeen,
   }) {
     _sub = NativeBridge.updateEvents.listen(_onEvent);
   }
@@ -39,8 +42,16 @@ class AppUpdater extends ChangeNotifier {
   /// Aggiornamento in background acceso (preferenza del cliente o imposta dal pannello).
   final bool Function() backgroundEnabled;
 
+  /// Aggiornamento obbligatorio deciso dal pannello: giorni di grazia dal primo avviso, null = il cliente può rimandare.
+  final int? Function() forceDays;
+
   /// Visione in corso: niente download non richiesti e niente finestre.
   final bool Function() watching;
+
+  /// Primo avviso salvato ("codice:millisecondi") e suo salvataggio.
+  final Future<String> Function() loadFirstSeen;
+  final Future<void> Function(String) saveFirstSeen;
+  String _first = '';
 
   StreamSubscription<Map<String, dynamic>>? _sub;
   Timer? _timer;
@@ -63,6 +74,28 @@ class AppUpdater extends ChangeNotifier {
 
   /// La versione da proporre al cliente: l'interfaccia mostra la finestra e poi rimette null.
   final ValueNotifier<UpdateInfo?> offer = ValueNotifier(null);
+
+  /// Primo avviso al cliente di [u]: da lì contano i giorni di grazia.
+  Future<int> _firstSeen(UpdateInfo u) async {
+    if (_first.isEmpty) _first = await loadFirstSeen();
+    final parts = _first.split(':');
+    if (parts.length == 2 && int.tryParse(parts[0]) == u.code) return int.tryParse(parts[1]) ?? DateTime.now().millisecondsSinceEpoch;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    _first = '${u.code}:$now';
+    await saveFirstSeen(_first);
+    return now;
+  }
+
+  /// L'app va bloccata: termine scaduto e APK già scaricato e verificato (mai per un problema di rete).
+  bool get mustUpdate {
+    final u = pending;
+    final days = forceDays();
+    if (u == null || days == null || !ready) return false;
+    final parts = _first.split(':');
+    if (parts.length != 2 || int.tryParse(parts[0]) != u.code) return false;
+    final first = int.tryParse(parts[1]) ?? 0;
+    return DateTime.now().millisecondsSinceEpoch - first >= days * 86400000;
+  }
 
   /// Controllo periodico: all'avvio e poi ogni ora.
   void start() {
@@ -126,6 +159,7 @@ class AppUpdater extends ChangeNotifier {
       }
       pending = u;
       message = null;
+      await _firstSeen(u);
       final st = await NativeBridge.updateStatus(code);
       ready = st['ready'] == true;
       final metered = st['metered'] == true;
@@ -154,7 +188,7 @@ class AppUpdater extends ChangeNotifier {
   void _maybeOffer({bool manual = false}) {
     final u = pending;
     if (u == null || watching()) return;
-    if (!manual && _offeredCode == u.code) return;
+    if (!manual && !mustUpdate && _offeredCode == u.code) return;
     _offeredCode = u.code;
     offer.value = u;
   }

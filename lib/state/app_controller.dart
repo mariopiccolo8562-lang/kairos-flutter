@@ -174,7 +174,10 @@ class AppController {
       currentCode: device.versionCode,
       currentVersion: device.version,
       backgroundEnabled: () => bgUpdate,
+      forceDays: () => switch (_rc['force']?.toString()) { 'now' => 0, '3d' => 3, '7d' => 7, _ => null },
       watching: () => _watching != null || _inPlayer,
+      loadFirstSeen: _store.loadUpdFirst,
+      saveFirstSeen: _store.saveUpdFirst,
     );
     final model = device.rawModel.replaceAll(RegExp(r'[^\x20-\x7E]'), '').trim();
     net.userAgent =
@@ -895,6 +898,7 @@ class AppController {
     _applyLite();
     if (!previewEnabled && previewBefore) stopPreview(release: true);
     uiRevision.value++;
+    if (_updaterStarted) updater.onForeground(); // es. aggiornamento appena reso obbligatorio dal pannello
     if (Perf.lite != before) uiRevision.value++;
   }
 

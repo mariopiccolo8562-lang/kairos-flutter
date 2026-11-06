@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -281,11 +283,69 @@ Future<String?> showPinInput(BuildContext context, {required String title, requi
 
 /// Propone la versione nuova dell'app: «Installa ora» se l'APK è già scaricato in background,
 /// altrimenti «Aggiorna ora» con l'avanzamento del download. Android chiede poi la sua conferma.
+bool _updateDialogOpen = false;
+
 Future<void> showUpdateDialog(BuildContext context, AppUpdater updater) async {
   final u = updater.pending;
-  if (u == null) return;
+  if (u == null || _updateDialogOpen) return;
   _pausePreview(context);
   final ready = updater.ready;
+  if (updater.mustUpdate) {
+    // aggiornamento obbligatorio: si va avanti solo installando (niente «Più tardi», il tasto indietro non chiude)
+    _updateDialogOpen = true;
+    try {
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => PopScope(
+          canPop: false,
+          child: ListenableBuilder(
+            listenable: updater,
+            builder: (context, child) => _dialogFrame(
+              width: 460,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Aggiornamento ${u.version} necessario', style: AppText.title),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Per continuare a usare Kairos Plus va installata la versione nuova: è già scaricata e verificata. Premi Installa e conferma nella schermata di Android, ci vuole meno di un minuto.',
+                    style: AppText.body,
+                  ),
+                  if (updater.message != null) ...[
+                    const SizedBox(height: 10),
+                    Text(updater.message!, style: AppText.body.copyWith(color: Brand.accent)),
+                  ],
+                  const SizedBox(height: 20),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      TvButton(label: 'Chiudi l\'app', onPressed: () => SystemNavigator.pop()),
+                      const SizedBox(width: 12),
+                      TvButton(label: 'Installa ora', autofocus: true, onPressed: () => unawaited(updater.install())),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      _updateDialogOpen = false;
+    }
+    return;
+  }
+  _updateDialogOpen = true;
+  try {
+    await _updateDialogNormal(context, updater, u, ready);
+  } finally {
+    _updateDialogOpen = false;
+  }
+}
+
+Future<void> _updateDialogNormal(BuildContext context, AppUpdater updater, UpdateInfo u, bool ready) async {
   final go = await showTvConfirm(
     context,
     title: ready ? 'Aggiornamento ${u.version} pronto' : 'Nuova versione ${u.version}',

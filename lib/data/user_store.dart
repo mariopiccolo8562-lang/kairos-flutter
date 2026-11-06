@@ -28,6 +28,7 @@ class UserStore {
   static const String _kPreviewMode = 'preview_mode';
   static const String _kBgUpdate = 'bg_update';
   static const String _kUpdSeen = 'upd_seen';
+  static const String _kUpdFirst = 'upd_first';
 
   // ---------------------------------------------------------------------------
   // Pannello
@@ -142,6 +143,11 @@ class UserStore {
   Future<int> loadUpdSeen() async => await _prefs.getInt(_kUpdSeen) ?? 0;
 
   Future<void> saveUpdSeen(int value) => _prefs.setInt(_kUpdSeen, value);
+
+  /// Primo avviso al cliente di una versione: "codice:millisecondi" (da lì contano i giorni dell'aggiornamento obbligatorio).
+  Future<String> loadUpdFirst() async => await _prefs.getString(_kUpdFirst) ?? '';
+
+  Future<void> saveUpdFirst(String value) => _prefs.setString(_kUpdFirst, value);
 
   /// Anteprima dei canali: click (1° OK riquadro, 2° OK schermo intero) | off
   Future<String> loadPreviewMode() async => await _prefs.getString(_kPreviewMode) ?? 'click';
