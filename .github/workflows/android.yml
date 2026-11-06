@@ -34,14 +34,20 @@ jobs:
       - name: Test
         run: flutter test
 
-      # Chiave di firma definitiva (come Kairos Lite e Kairos TV): segreti ANDROID_KEYSTORE_B64,
-      # ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD. Senza, firma di anteprima.
+      # Chiave di firma definitiva: bastano i segreti ANDROID_KEYSTORE_B64 e ANDROID_KEYSTORE_PASSWORD
+      # (alias «kairosplus», stessa password per la chiave). ANDROID_KEY_ALIAS e ANDROID_KEY_PASSWORD
+      # servono solo se la chiave è stata creata in un altro modo. Senza segreti: firma di anteprima.
       - name: Chiave di firma
         env:
           KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
           if [ -n "$KS_B64" ]; then
-            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            [ -n "$KS_PASS" ] || { echo "::error::Manca il segreto ANDROID_KEYSTORE_PASSWORD"; exit 1; }
+            echo "$KS_B64" | tr -d ' \r\n' | base64 -d > "$RUNNER_TEMP/release.jks" \
+              || { echo "::error::ANDROID_KEYSTORE_B64 non è copiato per intero: incollalo di nuovo"; exit 1; }
+            keytool -list -keystore "$RUNNER_TEMP/release.jks" -storepass "$KS_PASS" > /dev/null \
+              || { echo "::error::La chiave non si apre: controlla ANDROID_KEYSTORE_PASSWORD"; exit 1; }
             echo "KS_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
             echo "Firma con la chiave definitiva"
           else
@@ -53,8 +59,8 @@ jobs:
       - name: Compilazione APK
         env:
           KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS || 'kairosplus' }}
+          KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD || secrets.ANDROID_KEYSTORE_PASSWORD }}
         run: |
           flutter build apk --release \
             --target-platform android-arm,android-arm64 \
@@ -62,6 +68,9 @@ jobs:
             --build-number=${{ github.run_number }}
           cp build/app/outputs/flutter-apk/app-release.apk kairos-plus.apk
           ls -l kairos-plus.apk
+          # con quale chiave è firmato (anteprima o definitiva)
+          AS=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
+          if [ -n "$AS" ]; then "$AS" verify --print-certs kairos-plus.apk | grep -E "certificate (DN|SHA-256)" || true; fi
 
       # File letto dal pannello Kairos per sapere qual è l'ultima versione di Kairos Plus
       - name: Versione per il pannello
