@@ -44,6 +44,9 @@ class TvTextField extends StatefulWidget {
   final TextStyle? style;
   final TextAlign textAlign;
 
+  /// True se [node] è un campo mentre si scrive (le frecce ◀▶ muovono il cursore).
+  static bool isEditing(FocusNode? node) => node != null && _TvTextFieldState._byInner[node] != null;
+
   /// Indietro mentre si scrive: si chiude la scrittura restando sul campo.
   /// Restituisce true se il tasto è stato usato così.
   static bool handleBack() {

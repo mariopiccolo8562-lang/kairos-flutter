@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../app/brand.dart';
+import '../../app/perf.dart';
 import '../../app/theme.dart';
 import '../../data/models.dart';
 import 'net_image.dart';
@@ -11,6 +12,24 @@ const BorderRadius _radius = BorderRadius.all(Radius.circular(8));
 BoxDecoration _focusBorder(bool focused) => BoxDecoration(
       borderRadius: _radius,
       border: focused ? Border.all(color: Colors.white, width: 2.5) : null,
+    );
+
+/// Ingrandimento dell'elemento selezionato: animato, oppure istantaneo con la grafica leggera.
+Widget _scaled({required bool focused, required double scale, required Widget child}) {
+  if (Perf.lite) return focused ? Transform.scale(scale: scale, child: child) : child;
+  return AnimatedScale(
+    scale: focused ? scale : 1.0,
+    duration: Perf.quick,
+    curve: Curves.easeOutCubic,
+    child: child,
+  );
+}
+
+/// Angoli arrotondati: con la grafica leggera senza sfumatura dei bordi (costa meno alla GPU).
+Widget _rounded(Widget child) => ClipRRect(
+      borderRadius: _radius,
+      clipBehavior: Perf.lite ? Clip.hardEdge : Clip.antiAlias,
+      child: child,
     );
 
 /// Locandina verticale per film e serie.
@@ -38,18 +57,16 @@ class PosterCard extends StatelessWidget {
         if (focused) onFocused?.call();
       },
       // l'immagine sta in un livello suo: l'ingrandimento sposta il livello senza ridisegnarla
-      builder: (context, focused) => AnimatedScale(
-        scale: focused ? 1.1 : 1.0,
-        duration: const Duration(milliseconds: 140),
-        curve: Curves.easeOutCubic,
+      builder: (context, focused) => _scaled(
+        focused: focused,
+        scale: 1.1,
         child: Container(
           width: Layout.posterWidth,
           height: Layout.posterHeight,
           foregroundDecoration: _focusBorder(focused),
           child: RepaintBoundary(
-            child: ClipRRect(
-              borderRadius: _radius,
-              child: ColoredBox(
+            child: _rounded(
+              ColoredBox(
                 color: Brand.card,
                 child: SizedBox.expand(
                   child: NetImage(url: item.image, title: item.name, decodeWidth: Layout.posterWidth),
@@ -103,18 +120,16 @@ class WideCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            AnimatedScale(
-              scale: focused ? 1.06 : 1.0,
-              duration: const Duration(milliseconds: 140),
-              curve: Curves.easeOutCubic,
+            _scaled(
+              focused: focused,
+              scale: 1.06,
               child: Container(
                 width: Layout.wideWidth,
                 height: Layout.wideHeight,
                 foregroundDecoration: _focusBorder(focused),
                 child: RepaintBoundary(
-                  child: ClipRRect(
-                    borderRadius: _radius,
-                    child: ColoredBox(
+                  child: _rounded(
+                    ColoredBox(
                       color: Brand.card,
                       child: Stack(
                         fit: StackFit.expand,

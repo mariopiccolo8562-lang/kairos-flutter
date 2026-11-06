@@ -3,6 +3,7 @@ import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 
 import '../../app/app_scope.dart';
 import '../../app/brand.dart';
+import '../../app/perf.dart';
 import '../../app/theme.dart';
 import '../../core/format.dart';
 import '../../data/models.dart';
@@ -158,7 +159,31 @@ class _SettingsPageState extends State<SettingsPage> {
                 onSelect: () => _showMessages(messages),
               ),
             const SizedBox(height: 12),
-            const _SectionTitle('Riproduzione'),
+            const _SectionTitle('Riproduzione e grafica'),
+            _SettingTile(
+              title: 'Anteprima dei canali',
+              value: app.previewEnabled ? '1° OK riquadro · 2° OK schermo intero' : 'Spenta: OK apre lo schermo intero',
+              onSelect: () async {
+                await app.setPreviewMode(app.previewEnabled ? 'off' : 'click');
+                if (mounted) setState(() {});
+              },
+            ),
+            _SettingTile(
+              title: 'Grafica leggera',
+              value: switch (app.liteMode) {
+                'on' => 'Sempre (più veloce)',
+                'off' => 'Mai (grafica completa)',
+                _ => app.lite ? 'Automatica: attiva su questo dispositivo' : 'Automatica: non serve qui',
+              },
+              onSelect: () async {
+                await app.setLiteMode(switch (app.liteMode) {
+                  'auto' => 'on',
+                  'on' => 'off',
+                  _ => 'auto',
+                });
+                if (mounted) setState(() {});
+              },
+            ),
             if (isXtream)
               ValueListenableBuilder<String>(
                 valueListenable: app.liveFormat,
@@ -258,7 +283,7 @@ class _SettingTile extends StatelessWidget {
         focusNode: focusNode,
         onSelect: onSelect,
         builder: (context, focused) => AnimatedContainer(
-          duration: const Duration(milliseconds: 110),
+          duration: Perf.quick,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           decoration: BoxDecoration(
             color: focused ? Colors.white : const Color(0x14FFFFFF),

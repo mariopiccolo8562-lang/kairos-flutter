@@ -7,6 +7,7 @@ import '../../data/models.dart';
 import '../../state/app_controller.dart';
 import '../navigation.dart';
 import '../widgets/cards.dart';
+import '../widgets/catalog_loading.dart';
 import '../widgets/content_row.dart';
 import '../widgets/rows_view.dart';
 import '../widgets/tv_text_field.dart';
@@ -64,7 +65,12 @@ class _SearchPageState extends State<SearchPage> {
             ),
           ),
           const SizedBox(height: 14),
-          Expanded(child: _results(app)),
+          Expanded(
+            child: ValueListenableBuilder<Catalog?>(
+              valueListenable: app.catalog,
+              builder: (context, catalog, child) => _results(app),
+            ),
+          ),
         ],
       ),
     );
@@ -73,6 +79,7 @@ class _SearchPageState extends State<SearchPage> {
   Widget _results(AppController app) {
     final catalog = app.catalog.value;
     if (catalog == null) return const SizedBox.shrink();
+    if (catalog.partial) return const CatalogLoading();
     if (_term.length < 2) {
       return const Padding(
         padding: EdgeInsets.symmetric(horizontal: Layout.pagePadding),

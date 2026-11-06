@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../../app/app_scope.dart';
 import '../../app/brand.dart';
+import '../../app/perf.dart';
 import '../../app/theme.dart';
 import '../../core/format.dart';
 import '../../data/models.dart';
@@ -84,7 +85,7 @@ class _HeroHeaderState extends State<HeroHeader> {
   MovieDetails? _details;
   Timer? _imageTimer;
   Timer? _detailsTimer;
-  late final bool _lite = AppScope.of(context).lite;
+  final bool _lite = Perf.lite;
 
   @override
   void initState() {
@@ -205,28 +206,31 @@ class _HeroHeaderState extends State<HeroHeader> {
               fallback: false,
             ),
           ),
-        const Positioned.fill(
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [Brand.background, Color(0xE60B0812), Color(0x000B0812)],
-                stops: [0.0, 0.45, 0.82],
+        // le sfumature servono solo sopra un'immagine (con la grafica leggera non ce ne sono)
+        if (backdrop != null && !d.isLogo) ...const [
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [Brand.background, Color(0xE60B0812), Color(0x000B0812)],
+                  stops: [0.0, 0.45, 0.82],
+                ),
               ),
             ),
           ),
-        ),
-        const Positioned.fill(
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.bottomCenter,
-                end: Alignment.topCenter,
-                colors: [Brand.background, Color(0x000B0812)],
-                stops: [0.0, 0.42],
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.bottomCenter,
+                  end: Alignment.topCenter,
+                  colors: [Brand.background, Color(0x000B0812)],
+                  stops: [0.0, 0.42],
+                ),
               ),
             ),
           ),
-        ),
+        ],
         Positioned(
           left: Layout.pagePadding,
           top: Layout.safeTop + 4,

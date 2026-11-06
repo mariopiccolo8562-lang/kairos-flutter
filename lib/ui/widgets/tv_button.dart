@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../app/brand.dart';
+import '../../app/perf.dart';
 import 'tv_focusable.dart';
 
 /// Pulsante per TV: bianco con testo nero quando è selezionato.
@@ -46,7 +47,7 @@ class TvButton extends StatelessWidget {
                 ? Brand.accentDeep
                 : (selected ? Brand.accent.withValues(alpha: 0.35) : const Color(0x26FFFFFF)));
         return AnimatedContainer(
-          duration: const Duration(milliseconds: 110),
+          duration: Perf.quick,
           padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
           decoration: BoxDecoration(color: background, borderRadius: BorderRadius.circular(6)),
           child: Row(

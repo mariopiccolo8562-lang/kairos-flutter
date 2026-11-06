@@ -22,6 +22,8 @@ class UserStore {
   static const String _kFavorites = 'favorites';
   static const String _kProgress = 'progress';
   static const String _kLiveFormat = 'live_format';
+  static const String _kLiteMode = 'lite_mode';
+  static const String _kPreviewMode = 'preview_mode';
 
   // ---------------------------------------------------------------------------
   // Pannello
@@ -113,6 +115,16 @@ class UserStore {
   Future<String> loadLiveFormat() async => await _prefs.getString(_kLiveFormat) ?? 'ts';
 
   Future<void> saveLiveFormat(String format) => _prefs.setString(_kLiveFormat, format);
+
+  /// Grafica leggera: auto | on | off
+  Future<String> loadLiteMode() async => await _prefs.getString(_kLiteMode) ?? 'auto';
+
+  Future<void> saveLiteMode(String mode) => _prefs.setString(_kLiteMode, mode);
+
+  /// Anteprima dei canali: click (1° OK riquadro, 2° OK schermo intero) | off
+  Future<String> loadPreviewMode() async => await _prefs.getString(_kPreviewMode) ?? 'click';
+
+  Future<void> savePreviewMode(String mode) => _prefs.setString(_kPreviewMode, mode);
 
   /// Cambio di abbonamento o di playlist: preferiti e progressi non valgono più.
   Future<void> clearUserData() async {

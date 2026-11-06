@@ -80,6 +80,8 @@ jobs:
       # Release pubblica: l'ultima versione ha sempre lo stesso link, usato dal Kairos Store:
       # https://github.com/mariopiccolo8562-lang/kairos-flutter/releases/latest/download/kairos-plus.apk
       - name: Pubblicazione (link fisso per il Kairos Store)
+        id: release
+        continue-on-error: true
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v0.1.${{ github.run_number }}
@@ -88,3 +90,24 @@ jobs:
             kairos-plus.apk
             kairos-plus.json
           make_latest: true
+
+      # Se GitHub risponde con un errore (es. 500) la release si pubblica comunque:
+      # nuovi tentativi con un altro sistema, a distanza crescente.
+      - name: Pubblicazione (nuovo tentativo)
+        if: steps.release.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v0.1.${{ github.run_number }}"
+          for i in 1 2 3 4 5; do
+            if gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "Kairos Plus 0.1.${{ github.run_number }}" --notes "Kairos Plus 0.1.${{ github.run_number }}" --target "$GITHUB_SHA"; then
+              if gh release upload "$TAG" kairos-plus.apk kairos-plus.json --clobber && gh release edit "$TAG" --draft=false --latest; then
+                echo "Release pubblicata al tentativo $i"
+                exit 0
+              fi
+            fi
+            echo "Tentativo $i non riuscito, riprovo tra $((i * 20)) secondi"
+            sleep $((i * 20))
+          done
+          echo "::error::Release non pubblicata: GitHub non risponde"
+          exit 1

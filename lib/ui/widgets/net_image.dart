@@ -2,6 +2,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
 import '../../app/brand.dart';
+import '../../app/perf.dart';
 
 /// Immagine da internet con cache su disco e decodifica già alla misura
 /// mostrata (molta meno RAM). Se manca o non si carica, mostra una
@@ -48,7 +49,7 @@ class NetImage extends StatelessWidget {
       alignment: alignment,
       memCacheWidth: cacheWidth,
       filterQuality: FilterQuality.low,
-      fadeInDuration: const Duration(milliseconds: 160),
+      fadeInDuration: Perf.lite ? Duration.zero : const Duration(milliseconds: 160),
       fadeOutDuration: Duration.zero,
       placeholder: (context, url) =>
           transparentPlaceholder ? const SizedBox.expand() : const ColoredBox(color: Brand.card),

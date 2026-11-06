@@ -420,6 +420,7 @@ class Catalog {
     required this.recentMovies,
     required this.recentSeries,
     required this.fetchedAt,
+    this.partial = false,
   });
 
   factory Catalog.build({
@@ -430,6 +431,7 @@ class Catalog {
     required List<MediaItem> movies,
     required List<MediaItem> series,
     required int fetchedAt,
+    bool partial = false,
   }) {
     final liveGroups = _group(live);
     final movieGroups = _group(movies);
@@ -461,6 +463,50 @@ class Catalog {
       recentMovies: _recent(movies, 40),
       recentSeries: _recent(series, 40),
       fetchedAt: fetchedAt,
+      partial: partial,
+    );
+  }
+
+  /// Solo una parte del catalogo (quella della Home, per aprire subito l'app):
+  /// il resto sta arrivando.
+  final bool partial;
+
+  /// Piccola parte del catalogo per aprire subito la Home all'avvio (novità,
+  /// prime categorie, preferiti); il catalogo completo arriva subito dopo.
+  Catalog homeSnapshot(Iterable<String> favoriteKeys) {
+    const perCategory = 80;
+    final keys = <String>{};
+    void addAll(Iterable<MediaItem> items) {
+      for (final item in items) {
+        keys.add(item.key);
+      }
+    }
+
+    addAll(recentMovies);
+    addAll(recentSeries);
+    if (liveCategories.isNotEmpty) addAll(inCategory(MediaKind.live, liveCategories.first.id).take(perCategory));
+    for (final c in movieCategories.take(4)) {
+      addAll(inCategory(MediaKind.movie, c.id).take(perCategory));
+    }
+    for (final c in seriesCategories.take(2)) {
+      addAll(inCategory(MediaKind.series, c.id).take(perCategory));
+    }
+    for (final key in favoriteKeys) {
+      if (_byKey.containsKey(key)) keys.add(key);
+    }
+    List<MediaItem> pick(List<MediaItem> items) => [
+          for (final item in items)
+            if (keys.contains(item.key)) item,
+        ];
+    return Catalog.build(
+      liveCategories: liveCategories,
+      movieCategories: movieCategories,
+      seriesCategories: seriesCategories,
+      live: pick(live),
+      movies: pick(movies),
+      series: pick(series),
+      fetchedAt: fetchedAt,
+      partial: true,
     );
   }
 
@@ -535,6 +581,7 @@ class Catalog {
   Map<String, Object?> toJson() => {
         'v': 1,
         't': fetchedAt,
+        if (partial) 'partial': 1,
         'lc': [for (final c in liveCategories) c.toJson()],
         'mc': [for (final c in movieCategories) c.toJson()],
         'sc': [for (final c in seriesCategories) c.toJson()],
@@ -555,6 +602,7 @@ class Catalog {
       movies: list('m'),
       series: list('s'),
       fetchedAt: asInt(m['t']) ?? 0,
+      partial: asInt(m['partial']) == 1,
     );
   }
 

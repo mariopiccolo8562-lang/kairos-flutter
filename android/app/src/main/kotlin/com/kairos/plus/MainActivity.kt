@@ -18,6 +18,13 @@ import io.flutter.plugin.common.MethodChannel
  */
 class MainActivity : FlutterActivity() {
     private var pendingPlay: MethodChannel.Result? = null
+    private var preview: PreviewBox? = null
+
+    private fun previewBox(): PreviewBox = preview ?: PreviewBox(this) { key, state ->
+        try {
+            channel?.invokeMethod("previewEvent", org.json.JSONObject().put("key", key).put("state", state).toString())
+        } catch (_: Exception) {}
+    }.also { preview = it }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -26,7 +33,25 @@ class MainActivity : FlutterActivity() {
         ch.setMethodCallHandler { call, result ->
             when (call.method) {
                 "device" -> result.success(deviceInfo())
+                "previewShow" -> {
+                    (call.arguments as? String)?.let { previewBox().show(it) }
+                    result.success(true)
+                }
+                "previewMove" -> {
+                    (call.arguments as? String)?.let { preview?.move(it) }
+                    result.success(true)
+                }
+                "previewStop" -> {
+                    preview?.stop()
+                    result.success(true)
+                }
+                "previewRelease" -> {
+                    preview?.release()
+                    result.success(true)
+                }
                 "play" -> {
+                    // un solo decoder alla volta: l'anteprima si chiude prima dello schermo intero
+                    preview?.release()
                     val data = call.arguments as? String
                     if (data.isNullOrEmpty()) {
                         result.error("args", "Dati di riproduzione mancanti", null)
@@ -50,6 +75,12 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+    }
+
+    override fun onPause() {
+        // app in pausa (Home, lettore a schermo intero…): il riquadro libera il decoder
+        preview?.release()
+        super.onPause()
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {

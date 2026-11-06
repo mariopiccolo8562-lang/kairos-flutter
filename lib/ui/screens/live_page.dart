@@ -13,6 +13,7 @@ import '../../data/models.dart';
 import '../../state/app_controller.dart';
 import '../navigation.dart';
 import '../widgets/cards.dart';
+import '../widgets/catalog_loading.dart';
 import '../widgets/net_image.dart';
 import '../widgets/tv_button.dart';
 import '../widgets/tv_focusable.dart';
@@ -22,10 +23,11 @@ const String _allId = '__tutti';
 const double _categoryExtent = 44;
 const double _channelExtent = 50;
 
-/// TV in diretta: categorie, canali e scheda del canale con la guida TV.
+/// TV in diretta: categorie, canali e scheda del canale con anteprima e guida TV.
 ///
-/// Le frecce ◀▶ passano da una colonna all'altra tornando sempre al punto
-/// giusto (la categoria scelta, l'ultimo canale visto), senza salti.
+/// Come nelle altre app Kairos: OK una volta il canale parte nel riquadro,
+/// OK di nuovo si apre lo schermo intero. Le frecce ◀▶ passano da una colonna
+/// all'altra tornando sempre al punto giusto (categoria scelta, ultimo canale).
 class LivePage extends StatefulWidget {
   const LivePage({super.key, required this.entryNode});
 
@@ -40,12 +42,23 @@ class _LivePageState extends State<LivePage> {
   GlobalKey<_ChannelListState> _channelsKey = GlobalKey<_ChannelListState>();
   final GlobalKey<_CategoryListState> _categoriesKey = GlobalKey<_CategoryListState>();
   final FocusNode _watchNode = FocusNode(debugLabel: 'guarda');
+  final GlobalKey _previewBoxKey = GlobalKey(debugLabel: 'riquadro');
   final ValueNotifier<MediaItem?> _focusedChannel = ValueNotifier(null);
+  late final AppController _app;
+
+  @override
+  void initState() {
+    super.initState();
+    _app = AppScope.of(context);
+  }
   final Debouncer _categoryDebounce = Debouncer(const Duration(milliseconds: 220));
   final Debouncer _channelDebounce = Debouncer(const Duration(milliseconds: 120));
 
   @override
   void dispose() {
+    // uscendo dalla TV in diretta il riquadro libera il decoder
+    final app = _app;
+    Future<void>.microtask(() => app.stopPreview(release: true));
     _categoryDebounce.cancel();
     _channelDebounce.cancel();
     _focusedChannel.dispose();
@@ -67,6 +80,7 @@ class _LivePageState extends State<LivePage> {
 
   void _setCategory(String id) {
     if (id == _categoryId) return;
+    _app.stopPreview();
     setState(() {
       _categoryId = id;
       _channelsKey = GlobalKey<_ChannelListState>();
@@ -100,9 +114,49 @@ class _LivePageState extends State<LivePage> {
 
   void _focusCategories() => _categoriesKey.currentState?.focusSelected();
 
+  /// Schermo intero (il riquadro si chiude prima: un solo video alla volta).
   void _play(AppController app, List<MediaItem> channels, MediaItem channel) {
+    app.stopPreview(release: true);
     final index = channels.indexWhere((c) => c.key == channel.key);
     playItems(context, app.livePlaylist(channels), index < 0 ? 0 : index);
+  }
+
+  /// Ci si sposta su un altro canale: l'anteprima di quello prima si ferma subito.
+  void _onChannelFocused(MediaItem channel) {
+    final current = _app.preview.value.key;
+    if (current != null && current != channel.key) _app.stopPreview();
+    _channelDebounce.run(() {
+      if (mounted) _focusedChannel.value = channel;
+    });
+  }
+
+  /// OK sul canale: la prima volta parte nel riquadro, la seconda si apre a schermo intero.
+  Future<void> _onChannelSelected(List<MediaItem> channels, MediaItem channel) async {
+    final app = _app;
+    if (!app.previewEnabled || app.preview.value.isFor(channel.key)) {
+      _play(app, channels, channel);
+      return;
+    }
+    _channelDebounce.cancel();
+    _focusedChannel.value = channel;
+    // il riquadro deve essere già disegnato per sapere dove mettere il video
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    final rect = _previewRect();
+    if (rect == null) {
+      _play(app, channels, channel);
+      return;
+    }
+    final block = await app.startPreview(app.playbackForChannel(channel), rect);
+    if (block != null && mounted) {
+      await showTvMessage(context, title: 'Visione non disponibile', message: block);
+    }
+  }
+
+  Rect? _previewRect() {
+    final box = _previewBoxKey.currentContext?.findRenderObject();
+    if (box is! RenderBox || !box.attached || !box.hasSize) return null;
+    return box.localToGlobal(Offset.zero) & box.size;
   }
 
   Widget _column({required Widget child, VoidCallback? onLeft, VoidCallback? onRight}) {
@@ -139,6 +193,13 @@ class _LivePageState extends State<LivePage> {
         valueListenable: app.catalog,
         builder: (context, catalog, child) {
           if (catalog == null) return const SizedBox.shrink();
+          if (catalog.partial) return const CatalogLoading(message: 'Carico i canali…');
+          // il catalogo completo è arrivato mentre si era già nella pagina: si va sui canali
+          if (widget.entryNode.hasPrimaryFocus) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted && widget.entryNode.hasPrimaryFocus) _focusChannels();
+            });
+          }
           return ValueListenableBuilder<int>(
             valueListenable: app.favoritesRevision,
             builder: (context, revision, child) {
@@ -191,22 +252,21 @@ class _LivePageState extends State<LivePage> {
                                     child: _ChannelList(
                                       key: _channelsKey,
                                       channels: channels,
-                                      onFocused: (channel) => _channelDebounce.run(() {
-                                        if (mounted) _focusedChannel.value = channel;
-                                      }),
-                                      onSelected: (channel) => _play(app, channels, channel),
+                                      onFocused: _onChannelFocused,
+                                      onSelected: (channel) => _onChannelSelected(channels, channel),
                                     ),
                                   ),
                           ),
                           const SizedBox(width: 14),
                           SizedBox(
-                            width: 240,
+                            width: 300,
                             child: _column(
                               onLeft: _focusChannels,
                               onRight: () {},
                               child: _ChannelInfo(
                                 channel: _focusedChannel,
                                 watchNode: _watchNode,
+                                previewBoxKey: _previewBoxKey,
                                 onPlay: (channel) => _play(app, channels, channel),
                               ),
                             ),
@@ -445,10 +505,16 @@ class _ChannelListState extends State<_ChannelList> {
 
 /// Scheda del canale selezionato: logo, programma in onda e successivo.
 class _ChannelInfo extends StatefulWidget {
-  const _ChannelInfo({required this.channel, required this.watchNode, required this.onPlay});
+  const _ChannelInfo({
+    required this.channel,
+    required this.watchNode,
+    required this.previewBoxKey,
+    required this.onPlay,
+  });
 
   final ValueListenable<MediaItem?> channel;
   final FocusNode watchNode;
+  final GlobalKey previewBoxKey;
   final ValueChanged<MediaItem> onPlay;
 
   @override
@@ -506,22 +572,66 @@ class _ChannelInfoState extends State<_ChannelInfo> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(
-            height: 70,
-            width: double.infinity,
-            child: NetImage(
-              url: channel.image,
-              title: channel.name,
-              fit: BoxFit.contain,
-              decodeWidth: 200,
-              transparentPlaceholder: true,
-              showTitleOnFallback: false,
+          // riquadro dell'anteprima: il video (nativo) si posa esattamente qui sopra
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: AspectRatio(
+              aspectRatio: 16 / 9,
+              child: ColoredBox(
+                key: widget.previewBoxKey,
+                color: Colors.black,
+                child: ValueListenableBuilder<PreviewState>(
+                  valueListenable: app.preview,
+                  builder: (context, preview, child) {
+                    final mine = preview.isFor(channel.key);
+                    if (mine && preview.status == 'playing') return const SizedBox.expand();
+                    return Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.all(22),
+                          child: NetImage(
+                            url: channel.image,
+                            title: channel.name,
+                            fit: BoxFit.contain,
+                            decodeWidth: 180,
+                            transparentPlaceholder: true,
+                            showTitleOnFallback: false,
+                            fallback: false,
+                          ),
+                        ),
+                        if (mine && preview.status == 'loading')
+                          const Center(
+                            child: SizedBox(width: 28, height: 28, child: CircularProgressIndicator(strokeWidth: 2.5)),
+                          ),
+                      ],
+                    );
+                  },
+                ),
+              ),
             ),
           ),
-          const SizedBox(height: 10),
-          Text(channel.name, maxLines: 2, overflow: TextOverflow.ellipsis, style: AppText.rowTitle),
-          if (channel.number != null) Text('Canale ${channel.number}', style: AppText.small),
-          const SizedBox(height: 10),
+          const SizedBox(height: 6),
+          ValueListenableBuilder<PreviewState>(
+            valueListenable: app.preview,
+            builder: (context, preview, child) {
+              final mine = preview.isFor(channel.key);
+              final hint = !app.previewEnabled
+                  ? 'OK · schermo intero'
+                  : (mine
+                      ? (preview.status == 'error' ? 'Anteprima non disponibile · OK: schermo intero' : 'OK di nuovo · schermo intero')
+                      : 'OK · anteprima');
+              return Text(hint, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppText.small.copyWith(color: Brand.accent));
+            },
+          ),
+          const SizedBox(height: 8),
+          Text(
+            channel.number == null ? channel.name : '${channel.number}  ·  ${channel.name}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: AppText.rowTitle,
+          ),
+          const SizedBox(height: 8),
           Expanded(
             child: ClipRect(
               child: Column(
@@ -529,7 +639,7 @@ class _ChannelInfoState extends State<_ChannelInfo> {
                 children: [
                   if (current != null) _EpgLine(label: 'ORA', entry: current, now: now, showProgress: true),
                   if (next != null) ...[
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 8),
                     _EpgLine(label: 'DOPO', entry: next, now: now),
                   ],
                   if (app.supportsEpg && epg == null) const Text('Carico la guida…', style: AppText.small),
@@ -589,7 +699,7 @@ class _EpgLine extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 4),
-        Text(entry.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: AppText.body),
+        Text(entry.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppText.body),
         if (showProgress) ...[
           const SizedBox(height: 6),
           ProgressBar(value: entry.progress(now)),

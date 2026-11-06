@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../app/perf.dart';
 import '../../app/theme.dart';
 
 typedef RowItemBuilder = Widget Function(BuildContext context, int index, VoidCallback onFocused);
@@ -56,7 +57,11 @@ class _ContentRowState extends State<ContentRow> {
     final max = _scroll.position.maxScrollExtent;
     final target = (index * widget.itemExtent).clamp(0.0, max).toDouble();
     if ((target - _scroll.offset).abs() < 1) return;
-    _scroll.animateTo(target, duration: const Duration(milliseconds: 220), curve: Curves.easeOutCubic);
+    if (Perf.lite) {
+      _scroll.jumpTo(target);
+    } else {
+      _scroll.animateTo(target, duration: Perf.scroll, curve: Curves.easeOutCubic);
+    }
   }
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {

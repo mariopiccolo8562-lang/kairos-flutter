@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../../app/app_scope.dart';
 import '../../app/brand.dart';
+import '../../app/perf.dart';
 import '../../app/theme.dart';
 import '../../data/models.dart';
 import '../../state/app_controller.dart';
@@ -60,8 +61,11 @@ class _MainShellState extends State<MainShell> {
 
   final FocusNode _railArea = FocusNode(debugLabel: 'barra', canRequestFocus: false, skipTraversal: true);
   final FocusNode _contentArea = FocusNode(debugLabel: 'contenuto', canRequestFocus: false, skipTraversal: true);
+  // le voci della barra non partecipano allo spostamento con le frecce: la barra
+  // le gestisce da sola (▲▼ tra le voci, ▶ nella pagina), così il focus non salta
+  // dalla barra alla pagina e viceversa
   final Map<ShellTab, FocusNode> _tabNodes = {
-    for (final t in ShellTab.values) t: FocusNode(debugLabel: 'voce-${t.name}'),
+    for (final t in ShellTab.values) t: FocusNode(debugLabel: 'voce-${t.name}', skipTraversal: true),
   };
   final Map<ShellTab, FocusNode> _entryNodes = {
     for (final t in ShellTab.values) t: FocusNode(debugLabel: 'ingresso-${t.name}'),
@@ -178,12 +182,33 @@ class _MainShellState extends State<MainShell> {
 
   KeyEventResult _onRailKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) return KeyEventResult.ignored;
-    if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.arrowRight) {
       _enterContent(preferLast: true);
       return KeyEventResult.handled;
     }
-    if (event.logicalKey == LogicalKeyboardKey.arrowLeft) return KeyEventResult.handled;
+    if (key == LogicalKeyboardKey.arrowUp || key == LogicalKeyboardKey.arrowDown) {
+      // ▲▼ solo tra le voci della barra (prima ▲ su «Impostazioni» finiva a destra nella pagina)
+      final tabs = ShellTab.values;
+      var index = tabs.indexWhere((t) => _tabNodes[t]!.hasPrimaryFocus);
+      if (index < 0) index = _tab.index;
+      final next = index + (key == LogicalKeyboardKey.arrowUp ? -1 : 1);
+      if (next >= 0 && next < tabs.length) _tabNodes[tabs[next]]!.requestFocus();
+      return KeyEventResult.handled;
+    }
+    if (key == LogicalKeyboardKey.arrowLeft) return KeyEventResult.handled;
     return KeyEventResult.ignored;
+  }
+
+  /// ◀ nella pagina: si va all'elemento a sinistra; se non c'è, nella barra laterale.
+  /// ▲▼ restano nella pagina (le voci della barra non sono raggiungibili con le frecce).
+  KeyEventResult _onContentKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) return KeyEventResult.ignored;
+    if (event.logicalKey != LogicalKeyboardKey.arrowLeft) return KeyEventResult.ignored;
+    final focused = FocusManager.instance.primaryFocus;
+    if (focused == null || TvTextField.isEditing(focused)) return KeyEventResult.ignored; // cursore nel testo
+    if (!focused.focusInDirection(TraversalDirection.left)) _tabNodes[_tab]!.requestFocus();
+    return KeyEventResult.handled;
   }
 
   Future<void> _handleBack() async {
@@ -216,6 +241,7 @@ class _MainShellState extends State<MainShell> {
               left: Layout.railWidth,
               child: Focus(
                 focusNode: _contentArea,
+                onKeyEvent: _onContentKey,
                 child: KeyedSubtree(key: ValueKey<ShellTab>(_tab), child: _page(_tab)),
               ),
             ),
@@ -270,7 +296,7 @@ class _NavRail extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AnimatedContainer(
-      duration: const Duration(milliseconds: 160),
+      duration: Perf.lite ? Duration.zero : const Duration(milliseconds: 160),
       curve: Curves.easeOutCubic,
       width: expanded ? Layout.railExpandedWidth : Layout.railWidth,
       decoration: BoxDecoration(

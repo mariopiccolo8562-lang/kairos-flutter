@@ -2,6 +2,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../../app/perf.dart';
+
 /// Una fila della pagina: altezza fissa nota in anticipo, così sappiamo
 /// sempre dove si trova senza misurarla. [id] la identifica anche se
 /// cambia posizione (es. compare «Continua a guardare»): il focus non salta.
@@ -77,7 +79,7 @@ class _RowsViewState extends State<RowsView> {
     if (!_scroll.hasClients || index >= _offsets.length) return;
     final target = _offsets[index].clamp(0.0, _scroll.position.maxScrollExtent).toDouble();
     if ((target - _scroll.offset).abs() < 1) return;
-    _scroll.animateTo(target, duration: const Duration(milliseconds: 260), curve: Curves.easeOutCubic);
+    _scroll.animateTo(target, duration: Perf.scroll, curve: Curves.easeOutCubic);
   }
 
   @override

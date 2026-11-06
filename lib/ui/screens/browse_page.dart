@@ -7,6 +7,7 @@ import '../../data/models.dart';
 import '../../state/app_controller.dart';
 import '../navigation.dart';
 import '../widgets/cards.dart';
+import '../widgets/catalog_loading.dart';
 import '../widgets/content_row.dart';
 import '../widgets/hero_header.dart';
 import '../widgets/rows_view.dart';
@@ -54,6 +55,9 @@ class _BrowsePageState extends State<BrowsePage> {
       valueListenable: app.catalog,
       builder: (context, catalog, child) {
         if (catalog == null) return const SizedBox.shrink();
+        if (catalog.partial) {
+          return CatalogLoading(message: widget.kind == MediaKind.movie ? 'Carico i film…' : 'Carico le serie…');
+        }
         return Column(
           children: [
             HeroHeader(data: _hero),

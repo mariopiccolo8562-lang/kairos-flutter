@@ -38,6 +38,9 @@ Future<void> playItems(
   }
 }
 
+/// Le finestre si aprono sopra l'interfaccia: il video dell'anteprima (nativo) si ferma prima.
+void _pausePreview(BuildContext context) => AppScope.of(context).stopPreview();
+
 Widget _dialogFrame({required Widget child, double width = 440}) {
   return Dialog(
     backgroundColor: Brand.surface,
@@ -57,6 +60,7 @@ Future<bool> showTvConfirm(
   required String message,
   required String confirmLabel,
 }) async {
+  _pausePreview(context);
   final result = await showDialog<bool>(
     context: context,
     builder: (context) => _dialogFrame(
@@ -91,6 +95,7 @@ Future<void> showTvMessage(
   required String message,
   String button = 'Ok',
 }) {
+  _pausePreview(context);
   final scroll = ScrollController();
   return showDialog<void>(
     context: context,
@@ -135,6 +140,7 @@ Future<void> showTvMessage(
 
 /// Codice grande da leggere sullo schermo (es. per collegare un'altra TV).
 Future<void> showTvCode(BuildContext context, {required String title, required String code, required String message}) {
+  _pausePreview(context);
   return showDialog<void>(
     context: context,
     builder: (context) => _dialogFrame(
@@ -170,6 +176,7 @@ Future<void> showTvCode(BuildContext context, {required String title, required S
 
 /// Scelta da un elenco (es. la playlist da usare). Restituisce l'indice scelto.
 Future<int?> showTvChoice(BuildContext context, {required String title, required List<String> options, int selected = -1}) {
+  _pausePreview(context);
   return showDialog<int>(
     context: context,
     builder: (context) => _dialogFrame(

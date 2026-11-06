@@ -80,6 +80,32 @@ void main() {
     expect(copy.recentMovies.first.name, 'Tears of Steel');
   });
 
+  test('la copia per la Home ha le stesse file della Home ed è parziale', () {
+    final movies = [
+      for (var i = 0; i < 300; i++)
+        MediaItem(kind: MediaKind.movie, id: 'm$i', name: 'Film $i', categoryId: 'c${i % 6}', added: i),
+    ];
+    final catalog = Catalog.build(
+      liveCategories: const [Category(id: 'l', name: 'Italia')],
+      movieCategories: [for (var c = 0; c < 6; c++) Category(id: 'c$c', name: 'Categoria $c')],
+      seriesCategories: const [],
+      live: const [MediaItem(kind: MediaKind.live, id: '1', name: 'Rai 1', categoryId: 'l')],
+      movies: movies,
+      series: const [],
+      fetchedAt: 1,
+    );
+    final home = catalog.homeSnapshot(const ['movie:m5']);
+    expect(home.partial, isTrue);
+    expect(catalog.partial, isFalse);
+    expect(home.movies.length, lessThan(catalog.movies.length));
+    expect([for (final m in home.recentMovies) m.key], [for (final m in catalog.recentMovies) m.key]);
+    expect([for (final c in home.movieCategories.take(4)) c.id], [for (final c in catalog.movieCategories.take(4)) c.id]);
+    expect(home.byKey('movie:m5'), isNotNull);
+    final copy = Catalog.fromJson(home.toJson());
+    expect(copy.partial, isTrue);
+    expect(copy.live.single.name, 'Rai 1');
+  });
+
   group('Pannello Kairos', () {
     test('il codice della TV ha il formato delle altre app Kairos', () {
       for (var i = 0; i < 50; i++) {

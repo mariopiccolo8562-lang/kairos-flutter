@@ -15,9 +15,10 @@ class BootstrapScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
-    return ValueListenableBuilder<SessionStatus>(
-      valueListenable: app.status,
-      builder: (context, status, child) => switch (status) {
+    // la grafica (leggera o completa) cambiata dalle Impostazioni ricostruisce l'interfaccia
+    return ListenableBuilder(
+      listenable: Listenable.merge([app.status, app.uiRevision]),
+      builder: (context, child) => switch (app.status.value) {
         SessionStatus.starting => const SplashView(),
         SessionStatus.loading => const SplashView(message: 'Carico canali, film e serie…'),
         SessionStatus.activation => const ActivationScreen(),
@@ -25,7 +26,7 @@ class BootstrapScreen extends StatelessWidget {
             message: app.startupError ?? 'Errore sconosciuto',
             onRetry: app.retryStartup,
           ),
-        SessionStatus.ready => const MainShell(),
+        SessionStatus.ready => MainShell(key: ValueKey<int>(app.uiRevision.value)),
       },
     );
   }

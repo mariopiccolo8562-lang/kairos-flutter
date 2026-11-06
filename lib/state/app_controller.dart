@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+import '../app/perf.dart';
 import '../core/json.dart';
 import '../core/native.dart';
 import '../core/net.dart' as net;
@@ -23,6 +24,22 @@ class ActivationInfo {
   final String status;
   final String message;
   final bool warn;
+}
+
+/// Anteprima di un canale nel riquadro della TV in diretta.
+class PreviewState {
+  const PreviewState(this.key, this.status);
+  const PreviewState.idle()
+      : key = null,
+        status = 'idle';
+
+  /// Canale nel riquadro (null = nessuno).
+  final String? key;
+
+  /// idle | loading | playing | error
+  final String status;
+
+  bool isFor(String channelKey) => key == channelKey;
 }
 
 /// Cosa si sta guardando (per «Online ora» nel pannello).
@@ -67,6 +84,12 @@ class AppController {
   /// Avvisi da mostrare subito (es. «Disconnetti» dal pannello).
   final ValueNotifier<String?> notice = ValueNotifier(null);
 
+  /// Anteprima del canale nel riquadro (TV in diretta).
+  final ValueNotifier<PreviewState> preview = ValueNotifier(const PreviewState.idle());
+
+  /// Cambia quando cambia la grafica (leggera o completa): l'interfaccia si ricostruisce.
+  final ValueNotifier<int> uiRevision = ValueNotifier(0);
+
   DeviceInfo device = const DeviceInfo();
   PanelClient? _panel;
   PanelState? _state;
@@ -82,6 +105,10 @@ class AppController {
   String _catalogSig = '';
   bool _privacyOk = false;
   int _kickSeen = 0;
+  String _liteMode = 'auto';
+  String _previewMode = 'click';
+  int _previewSeq = 0;
+  bool _inPlayer = false;
 
   /// Messaggio da mostrare se il catalogo non si è potuto caricare.
   String? startupError;
@@ -92,8 +119,16 @@ class AppController {
 
   AppLifecycleListener? _lifecycle;
   StreamSubscription<PlayerEvent>? _playerSub;
+  StreamSubscription<PreviewEvent>? _previewSub;
 
-  bool get lite => device.isLite;
+  /// Grafica leggera (scelta dall'utente o automatica sulle chiavette con poca memoria).
+  bool get lite => Perf.lite;
+
+  /// auto | on | off
+  String get liteMode => _liteMode;
+
+  /// Anteprima dei canali attiva: 1° OK nel riquadro, 2° OK schermo intero.
+  bool get previewEnabled => _previewMode != 'off';
   String get deviceCode => _panel?.identity.code ?? '';
   String get appVersion => device.version.isEmpty ? '0.1' : device.version;
   Account? get account => _account;
@@ -105,15 +140,21 @@ class AppController {
   // Avvio
 
   Future<void> start() async {
+    // l'ultimo stato attivo e il catalogo salvato si leggono subito, in parallelo al resto
+    final cachedRaw = await _store.loadPanelState();
+    final cachedState = cachedRaw == null ? null : PanelState.parse(cachedRaw);
+    final wasActive = cachedState?.active ?? false;
+    final earlyHome = wasActive ? CatalogRepository.readHome() : null;
+    final earlyCache = wasActive ? CatalogRepository.readCache() : null;
+
     device = await NativeBridge.device();
     final model = device.rawModel.replaceAll(RegExp(r'[^\x20-\x7E]'), '').trim();
     net.userAgent =
         'Mozilla/5.0 (Linux; Android ${device.release.isEmpty ? '9' : device.release}; ${model.isEmpty ? 'Android' : model}) KairosPlus/$appVersion';
 
-    // chiavette con poca memoria: meno immagini tenute in memoria
-    final imageCache = PaintingBinding.instance.imageCache;
-    imageCache.maximumSize = lite ? 160 : 250;
-    imageCache.maximumSizeBytes = (lite ? 40 : 80) << 20;
+    _liteMode = await _store.loadLiteMode();
+    _previewMode = await _store.loadPreviewMode();
+    _applyLite();
 
     _favorites = await _store.loadFavorites();
     _progress = await _store.loadProgress();
@@ -141,17 +182,14 @@ class AppController {
     );
 
     _playerSub = NativeBridge.playerEvents.listen(_onPlayerEvent);
+    _previewSub = NativeBridge.previewEvents.listen(_onPreviewEvent);
     _lifecycle = AppLifecycleListener(onResume: _onResume, onPause: _onPause);
 
     // partenza immediata con l'ultimo stato attivo; il pannello si ricontrolla subito dopo
-    final cached = await _store.loadPanelState();
-    if (cached != null) {
-      final s = PanelState.parse(cached);
-      if (s.active) {
-        await _applyState(s);
-        unawaited(refreshPanel());
-        return;
-      }
+    if (cachedState != null && cachedState.active) {
+      await _applyState(cachedState, cache: earlyCache, home: earlyHome);
+      unawaited(refreshPanel());
+      return;
     }
     status.value = SessionStatus.activation;
     unawaited(_activationTick());
@@ -280,6 +318,7 @@ class AppController {
   void _goActivation(ActivationInfo info) {
     activation.value = info;
     if (status.value != SessionStatus.activation) {
+      stopPreview(release: true);
       _stopPulse();
       if (_watching != null) unawaited(NativeBridge.closePlayer());
       status.value = SessionStatus.activation;
@@ -388,7 +427,7 @@ class AppController {
     if (s != null && s.active) await _applyState(s);
   }
 
-  Future<void> _applyState(PanelState s) async {
+  Future<void> _applyState(PanelState s, {Future<Catalog?>? cache, Future<Catalog?>? home}) async {
     _state = s;
     panelState.value = s;
     final pl = _choosePlaylist(s);
@@ -411,15 +450,23 @@ class AppController {
       return;
     }
     if (sameList) {
-      final cached = await CatalogRepository.readCache();
+      // all'avvio prima la Home (copia piccola, si legge in un attimo), poi tutto il catalogo
+      final quick = home == null ? null : await home;
+      if (quick != null && !quick.isEmpty && catalog.value == null) {
+        catalog.value = quick;
+        status.value = SessionStatus.ready;
+      }
+      final cached = await (cache ?? CatalogRepository.readCache());
       if (cached != null && !cached.isEmpty) {
         catalog.value = cached;
         status.value = SessionStatus.ready;
+        unawaited(CatalogRepository.writeHome(cached, _favorites));
         if (cached.isStale) unawaited(_refreshInBackground());
         return;
       }
     }
-    status.value = SessionStatus.loading;
+    // niente cache valida: si scarica (se la Home è già a schermo, senza schermata di caricamento)
+    if (catalog.value == null) status.value = SessionStatus.loading;
     final error = await _fetchAndApply();
     if (error != null) {
       startupError = error;
@@ -452,7 +499,7 @@ class AppController {
     final account = _account;
     if (account == null) return 'Nessuna playlist configurata';
     try {
-      final fresh = await CatalogRepository.fetch(account);
+      final fresh = await CatalogRepository.fetch(account, favorites: _favorites);
       if (fresh.isEmpty) return 'La playlist non contiene contenuti';
       catalog.value = fresh;
       return null;
@@ -469,7 +516,7 @@ class AppController {
     final account = _account;
     if (account == null) return;
     try {
-      await CatalogRepository.fetch(account);
+      await CatalogRepository.fetch(account, favorites: _favorites);
     } on Object {
       // silenzioso: il catalogo in cache resta valido
     }
@@ -540,6 +587,7 @@ class AppController {
       if (kick != _kickSeen) {
         _kickSeen = kick;
         unawaited(_store.saveKickSeen(kick));
+        stopPreview(release: true);
         if (_watching != null) await NativeBridge.closePlayer();
         notice.value = 'Il tuo fornitore ha chiuso la visione su questo dispositivo.';
       }
@@ -588,6 +636,10 @@ class AppController {
       final block = await panel.stream(item.watchState, item.title);
       if (block != null) return block;
     }
+    // un solo video alla volta: il riquadro si chiude prima dello schermo intero
+    _previewSeq++;
+    preview.value = const PreviewState.idle();
+    _inPlayer = true;
     _playing = items;
     _watching = _Watch.of(item);
     _playerVisible = true;
@@ -606,6 +658,7 @@ class AppController {
     } finally {
       _watching = null;
       _playerVisible = false;
+      _inPlayer = false;
     }
     for (final raw in asList(result?['updates'])) {
       final m = asMap(raw);
@@ -655,6 +708,100 @@ class AppController {
       case 'foreground':
         _playerVisible = true;
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Anteprima dei canali (riquadro della TV in diretta)
+
+  /// Fa partire il canale nel riquadro [rect] (punti logici dello schermo).
+  /// Restituisce un messaggio se il pannello non consente la visione.
+  Future<String?> startPreview(PlaybackItem item, Rect rect) async {
+    final seq = ++_previewSeq;
+    preview.value = PreviewState(item.key, 'loading');
+    final panel = _panel;
+    // come nelle altre app Kairos l'anteprima è una visione come le altre (limite del pannello)
+    if (panel != null && (_state?.account?.maxStreams ?? 0) > 0) {
+      final block = await panel.stream('live', item.title);
+      if (seq != _previewSeq) return null; // nel frattempo si è passati ad altro
+      if (block != null) {
+        preview.value = const PreviewState.idle();
+        return block;
+      }
+    }
+    if (seq != _previewSeq) return null;
+    _watching = _Watch.of(item);
+    unawaited(_beat(true));
+    await NativeBridge.previewShow({
+      'key': item.key,
+      'url': item.url,
+      'alt': item.altUrls,
+      'x': rect.left,
+      'y': rect.top,
+      'w': rect.width,
+      'h': rect.height,
+      'ua': net.userAgent,
+      'lite': lite,
+    });
+    return null;
+  }
+
+  /// Ferma l'anteprima. [release] libera anche il decoder (si esce dalla TV in diretta).
+  void stopPreview({bool release = false}) {
+    _previewSeq++;
+    final active = preview.value.key != null;
+    if (active || release) unawaited(NativeBridge.previewStop(release: release));
+    if (active) {
+      preview.value = const PreviewState.idle();
+      _clearPreviewWatch();
+    }
+  }
+
+  void _clearPreviewWatch() {
+    if (_inPlayer || _watching?.state != 'live') return;
+    _watching = null;
+    unawaited(_beat(true));
+  }
+
+  void _onPreviewEvent(PreviewEvent e) {
+    final current = preview.value;
+    if (current.key == null || current.key != e.key) return;
+    switch (e.state) {
+      case 'loading':
+        preview.value = PreviewState(e.key, 'loading');
+      case 'playing':
+        preview.value = PreviewState(e.key, 'playing');
+      case 'error':
+        preview.value = PreviewState(e.key, 'error');
+        _clearPreviewWatch();
+      case 'stopped':
+        preview.value = const PreviewState.idle();
+        _clearPreviewWatch();
+    }
+  }
+
+  Future<void> setPreviewMode(String mode) async {
+    _previewMode = mode;
+    await _store.savePreviewMode(mode);
+    if (mode == 'off') stopPreview(release: true);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Grafica leggera
+
+  void _applyLite() {
+    Perf.lite = _liteMode == 'on' || (_liteMode == 'auto' && device.isLite);
+    // chiavette con poca memoria: meno immagini tenute in memoria
+    final imageCache = PaintingBinding.instance.imageCache;
+    imageCache.maximumSize = Perf.lite ? 160 : 250;
+    imageCache.maximumSizeBytes = (Perf.lite ? 40 : 80) << 20;
+  }
+
+  Future<void> setLiteMode(String mode) async {
+    final before = Perf.lite;
+    _liteMode = mode;
+    await _store.saveLiteMode(mode);
+    _applyLite();
+    if (Perf.lite != before) uiRevision.value++;
   }
 
   Future<void> setLiveFormat(String format) async {
@@ -841,6 +988,7 @@ class AppController {
     _stopPulse();
     _lifecycle?.dispose();
     unawaited(_playerSub?.cancel());
+    unawaited(_previewSub?.cancel());
     status.dispose();
     activation.dispose();
     panelState.dispose();
@@ -849,5 +997,7 @@ class AppController {
     favoritesRevision.dispose();
     progressRevision.dispose();
     notice.dispose();
+    preview.dispose();
+    uiRevision.dispose();
   }
 }
