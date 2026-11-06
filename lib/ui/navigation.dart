@@ -16,7 +16,7 @@ import 'widgets/tv_text_field.dart';
 Future<void> openDetails(BuildContext context, MediaItem item) async {
   if (!await parentalGate(context, item: item)) return;
   if (item.id == kPinItemId || !context.mounted) return; // segnaposto di una fila protetta: dopo il PIN la fila si riempie da sola
-  return Navigator.of(context).push(
+  await Navigator.of(context).push(
     PageRouteBuilder<void>(
       transitionDuration: const Duration(milliseconds: 200),
       reverseTransitionDuration: const Duration(milliseconds: 140),
