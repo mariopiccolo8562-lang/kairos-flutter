@@ -116,6 +116,18 @@ class AppUpdater extends ChangeNotifier {
     }
   }
 
+  /// È partita la visione (schermo intero o anteprima): un download in background in corso si ferma,
+  /// così non ruba banda al video; riparte con [onPlaybackEnded].
+  void onPlaybackStarted() {
+    if (pending != null && !ready) unawaited(NativeBridge.updateCancel());
+  }
+
+  /// La visione è finita: il download rimandato riparte (se le condizioni lo permettono).
+  void onPlaybackEnded() {
+    if (pending == null || ready || _checking || watching()) return;
+    if (backgroundEnabled() && _failed < 3) unawaited(check());
+  }
+
   /// Il pannello ha chiesto l'aggiornamento: controllo subito e scaricamento anche su rete a consumo.
   /// Restituisce l'esito da confermare al pannello.
   Future<String> fromPanel() async {
@@ -163,8 +175,9 @@ class AppUpdater extends ChangeNotifier {
       final st = await NativeBridge.updateStatus(code);
       ready = st['ready'] == true;
       final metered = st['metered'] == true;
+      // mai durante la visione: il download riparte da onPlaybackEnded quando il lettore si chiude
       if (!ready && !manual && (backgroundEnabled() || force) && (force || !metered) && !watching() && _failed < 3) {
-        await NativeBridge.updatePrefetch(url, code); // l'esito arriva con l'evento ready | failed
+        await NativeBridge.updatePrefetch(url, code); // l'esito arriva con l'evento ready | failed | deferred
       } else {
         _maybeOffer(manual: manual);
       }
@@ -205,6 +218,8 @@ class AppUpdater extends ChangeNotifier {
       case 'failed':
         _failed++; // si riprova al prossimo controllo (al massimo tre volte per versione)
         _maybeOffer(); // intanto il cliente può scaricarla a mano
+      case 'deferred':
+        break; // interrotto dalla visione: non conta come errore, riparte a fine visione
       case 'progress':
         progress = asInt(e['p']) ?? progress;
       case 'installer':

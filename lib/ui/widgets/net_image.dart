@@ -1,8 +1,34 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 
 import '../../app/brand.dart';
 import '../../app/perf.dart';
+
+/// Cache su disco delle immagini (loghi, locandine, sfondi): 2000 voci invece delle 200 di serie
+/// (un catalogo IPTV ne ha migliaia), validità 7 giorni, al massimo 4 scaricamenti insieme
+/// (le chiavette e i server IPTV non reggono 10 connessioni in parallelo mentre si scorre).
+abstract final class NetImageCache {
+  static final CacheManager manager = CacheManager(
+    Config(
+      'kairosImages',
+      stalePeriod: const Duration(days: 7),
+      maxNrOfCacheObjects: 2000,
+      fileService: HttpFileService()..concurrentFetches = 4,
+    ),
+  );
+
+  /// Svuota questa cache e quella di serie (file di versioni precedenti dell'app).
+  static Future<void> clear() async {
+    for (final m in [manager, DefaultCacheManager()]) {
+      try {
+        await m.emptyCache();
+      } on Object {
+        // cache già vuota o non apribile
+      }
+    }
+  }
+}
 
 /// Immagine da internet con cache su disco e decodifica già alla misura
 /// mostrata (molta meno RAM). Se manca o non si carica, mostra una
@@ -45,6 +71,7 @@ class NetImage extends StatelessWidget {
     final cacheWidth = width == null ? null : (width * MediaQuery.devicePixelRatioOf(context)).round();
     return CachedNetworkImage(
       imageUrl: u,
+      cacheManager: NetImageCache.manager,
       fit: fit,
       alignment: alignment,
       memCacheWidth: cacheWidth,

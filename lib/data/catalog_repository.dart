@@ -60,10 +60,14 @@ abstract final class CatalogRepository {
 Future<Catalog> _fetchAndStore(Account account, String path, String homePath, String agent, List<String> favorites) async {
   // ogni isolate ha le sue variabili: il nome con cui l'app si presenta va ripassato
   net.userAgent = agent;
-  final catalog = await ContentSource.of(account).fetchCatalog();
-  _write(path, catalog.toJson());
-  _write(homePath, catalog.homeSnapshot(favorites).toJson());
-  return catalog;
+  try {
+    final catalog = await ContentSource.of(account).fetchCatalog();
+    _write(path, catalog.toJson());
+    _write(homePath, catalog.homeSnapshot(favorites).toJson());
+    return catalog;
+  } finally {
+    net.closeClient(); // le connessioni dell'isolate non servono più
+  }
 }
 
 void _write(String path, Map<String, Object?> json) {

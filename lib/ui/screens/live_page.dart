@@ -626,7 +626,11 @@ class _ChannelInfoState extends State<_ChannelInfo> {
               final hint = !app.previewEnabled
                   ? 'OK · schermo intero'
                   : (mine
-                      ? (preview.status == 'error' ? 'Anteprima non disponibile · OK: schermo intero' : 'OK di nuovo · schermo intero')
+                      ? switch (preview.status) {
+                          'error' => 'Anteprima non disponibile · OK: schermo intero',
+                          'ended' => 'Trasmissione interrotta · OK: schermo intero',
+                          _ => 'OK di nuovo · schermo intero',
+                        }
                       : 'OK · anteprima');
               return Text(hint, maxLines: 1, overflow: TextOverflow.ellipsis, style: AppText.small.copyWith(color: Brand.accent));
             },

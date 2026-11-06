@@ -42,26 +42,25 @@ class XtreamSource extends ContentSource {
 
   @override
   Future<Catalog> fetchCatalog() async {
-    // Prima le categorie (leggere), poi i contenuti (pesanti), tre richieste
-    // alla volta per non sovraccaricare il server.
+    // Prima le categorie (leggere, insieme), poi i contenuti (pesanti) UNO ALLA VOLTA:
+    // diretta → film → serie, ognuno convertito subito così il JSON grezzo si libera prima
+    // del download successivo (tre risposte da decine di MB insieme mandano in OOM le chiavette).
     final categories = await Future.wait<Object?>([
       fetchJson(_api({'action': 'get_live_categories'})),
       fetchJson(_api({'action': 'get_vod_categories'})),
       fetchJson(_api({'action': 'get_series_categories'})),
     ]);
     const long = Duration(seconds: 90);
-    final streams = await Future.wait<Object?>([
-      fetchJson(_api({'action': 'get_live_streams'}), timeout: long),
-      fetchJson(_api({'action': 'get_vod_streams'}), timeout: long),
-      fetchJson(_api({'action': 'get_series'}), timeout: long),
-    ]);
+    final live = _parseList(await fetchJson(_api({'action': 'get_live_streams'}), timeout: long), _live);
+    final movies = _parseList(await fetchJson(_api({'action': 'get_vod_streams'}), timeout: long), _movie);
+    final series = _parseList(await fetchJson(_api({'action': 'get_series'}), timeout: long), _series);
     return Catalog.build(
       liveCategories: _categories(categories[0]),
       movieCategories: _categories(categories[1]),
       seriesCategories: _categories(categories[2]),
-      live: _parseList(streams[0], _live),
-      movies: _parseList(streams[1], _movie),
-      series: _parseList(streams[2], _series),
+      live: live,
+      movies: movies,
+      series: series,
       fetchedAt: DateTime.now().millisecondsSinceEpoch,
     );
   }

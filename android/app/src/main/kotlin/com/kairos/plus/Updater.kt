@@ -34,6 +34,7 @@ import kotlin.concurrent.thread
  */
 object Updater {
     private val busy = AtomicBoolean(false)
+    private val cancelBg = AtomicBoolean(false) // il prefetch in corso va interrotto (è partita la visione)
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var readyFile: File? = null
     @Volatile private var readyCode = 0
@@ -69,22 +70,31 @@ object Updater {
         "canInstall" to (Build.VERSION.SDK_INT < 26 || ctx.packageManager.canRequestPackageInstalls()),
     )
 
-    /** scaricamento in background: nessuna finestra; evento ready | failed */
+    /** scaricamento in background: nessuna finestra; evento ready | failed | deferred (interrotto dalla visione) */
     fun prefetch(ctx: Context, url: String, code: Int) {
         if (ready(ctx, code)) { event("ready") { put("code", code) }; return }
         if (!busy.compareAndSet(false, true)) return
+        cancelBg.set(false)
         thread(name = "kx-apk-bg") {
             try {
                 val out = fileFor(ctx, code)
-                fetch(ctx, url, out, null)
+                fetch(ctx, url, out, cancelBg, null)
                 readyFile = out; readyCode = code
                 cleanOld(ctx, out)
                 event("ready") { put("code", code) }
+            } catch (_: CancelledException) {
+                fileFor(ctx, code).delete()
+                event("deferred") { put("code", code) }
             } catch (e: Exception) {
                 event("failed") { put("code", code); put("msg", e.message ?: "errore") }
             } finally { busy.set(false) }
         }
     }
+
+    /** interrompe il solo prefetch in background (il download chiesto dal cliente continua) */
+    fun cancelPrefetch() { cancelBg.set(true) }
+
+    private class CancelledException : Exception("rinviato")
 
     /** installa: subito se l'APK è pronto, altrimenti lo scarica (eventi progress) e poi apre l'installer */
     fun install(a: Activity, url: String, code: Int) {
@@ -93,7 +103,7 @@ object Updater {
         thread(name = "kx-apk") {
             try {
                 val out = fileFor(a, code)
-                fetch(a, url, out) { p -> event("progress") { put("p", p) } }
+                fetch(a, url, out, null) { p -> event("progress") { put("p", p) } }
                 readyFile = out; readyCode = code
                 cleanOld(a, out)
                 event("progress") { put("p", 100) }
@@ -108,8 +118,8 @@ object Updater {
         try { dir(ctx).listFiles()?.forEach { if (it != keep && it.name.endsWith(".apk")) it.delete() } } catch (_: Exception) {}
     }
 
-    /** scarica [url] in [out] seguendo solo redirect https e verifica il file */
-    private fun fetch(ctx: Context, url: String, out: File, progress: ((Int) -> Unit)?) {
+    /** scarica [url] in [out] seguendo solo redirect https e verifica il file; [cancel] interrompe il download */
+    private fun fetch(ctx: Context, url: String, out: File, cancel: AtomicBoolean?, progress: ((Int) -> Unit)?) {
         var target = URL(url)
         var c = target.openConnection() as HttpURLConnection
         var hops = 0
@@ -138,6 +148,7 @@ object Updater {
                 FileOutputStream(out).use { fo ->
                     val buf = ByteArray(64 * 1024)
                     while (true) {
+                        if (cancel?.get() == true) throw CancelledException()
                         val n = input.read(buf)
                         if (n < 0) break
                         fo.write(buf, 0, n)

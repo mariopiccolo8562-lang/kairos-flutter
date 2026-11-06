@@ -17,16 +17,29 @@ class SourceException implements Exception {
   String toString() => message;
 }
 
-HttpClient _client() => HttpClient()
+HttpClient? _shared;
+
+/// Un solo client per isolate, riusato da tutte le richieste (keep-alive): niente connessione
+/// e handshake TLS nuovi a ogni chiamata. Si chiude solo con [closeClient].
+HttpClient _client() => _shared ??= HttpClient()
   ..connectionTimeout = const Duration(seconds: 15)
   ..idleTimeout = const Duration(seconds: 15)
+  ..maxConnectionsPerHost = 6
   ..userAgent = userAgent;
+
+/// Chiude le connessioni aperte (chiusura dell'app, fine dell'isolate di scaricamento,
+/// connessione rimasta appesa dopo un timeout). Il prossimo uso ne apre di nuove.
+void closeClient({bool force = false}) {
+  _shared?.close(force: force);
+  _shared = null;
+}
 
 /// Scarica un indirizzo come testo. Funziona anche dentro un isolate.
 Future<String> fetchText(Uri uri, {Duration timeout = const Duration(seconds: 30)}) async {
   final client = _client();
   try {
     final request = await client.getUrl(uri).timeout(timeout);
+    request.headers.set(HttpHeaders.userAgentHeader, userAgent);
     final response = await request.close().timeout(timeout);
     if (response.statusCode != HttpStatus.ok) {
       await response.drain<void>();
@@ -41,11 +54,10 @@ Future<String> fetchText(Uri uri, {Duration timeout = const Duration(seconds: 30
   } on HandshakeException {
     throw const SourceException('Connessione sicura (HTTPS) non riuscita');
   } on TimeoutException {
+    closeClient(force: true); // la connessione rimasta appesa non va riusata
     throw const SourceException('Il server non risponde (tempo scaduto)');
   } on HttpException catch (e) {
     throw SourceException('Errore di rete: ${e.message}');
-  } finally {
-    client.close(force: true);
   }
 }
 
@@ -74,6 +86,7 @@ Future<JsonResponse> postJson(Uri uri, Map<String, Object?> body, {Duration time
   final client = _client();
   try {
     final request = await client.postUrl(uri).timeout(timeout);
+    request.headers.set(HttpHeaders.userAgentHeader, userAgent);
     request.headers.contentType = ContentType.json;
     request.add(utf8.encode(jsonEncode(body)));
     final response = await request.close().timeout(timeout);
@@ -91,10 +104,9 @@ Future<JsonResponse> postJson(Uri uri, Map<String, Object?> body, {Duration time
   } on HandshakeException {
     throw const SourceException('Connessione sicura (HTTPS) non riuscita');
   } on TimeoutException {
+    closeClient(force: true);
     throw const SourceException('Il server non risponde (tempo scaduto)');
   } on HttpException catch (e) {
     throw SourceException('Errore di rete: ${e.message}');
-  } finally {
-    client.close(force: true);
   }
 }

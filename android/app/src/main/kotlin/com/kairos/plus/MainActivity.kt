@@ -10,7 +10,7 @@ import io.flutter.plugin.common.MethodChannel
 
 /**
  * Schermata principale (interfaccia Flutter) e ponte verso le parti native:
- * - "device": modello, memoria e versione, per il pannello e per la modalità leggera
+ * - "device": modello, memoria, versione e classe del lettore (D/N/O), per il pannello e per la modalità leggera
  * - "play": apre il lettore nativo (Media3/ExoPlayer su SurfaceView, il più fluido sulle Fire TV)
  *   e restituisce le posizioni di visione quando si chiude
  * - "closePlayer": chiude il lettore (es. «Disconnetti» dal pannello)
@@ -94,6 +94,11 @@ class MainActivity : FlutterActivity() {
                     if (url.startsWith("https://") && code > 0) Updater.install(this, url, code)
                     result.success(true)
                 }
+                // è partita la visione: il download in background dell'APK si ferma (riparte a fine visione)
+                "updateCancel" -> {
+                    Updater.cancelPrefetch()
+                    result.success(true)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -139,6 +144,8 @@ class MainActivity : FlutterActivity() {
             "sdk" to Build.VERSION.SDK_INT,
             "lowRam" to am.isLowRamDevice,
             "totalMemMb" to (mi.totalMem / (1024L * 1024L)).toInt(),
+            // classe del dispositivo per il lettore (Kairos Adaptive): D | N | O, separata dalla grafica leggera
+            "playerClass" to Adaptive.deviceClass(this),
             "version" to version,
             "versionCode" to versionCode,
         )

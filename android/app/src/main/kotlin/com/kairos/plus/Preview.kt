@@ -40,6 +40,12 @@ class PreviewBox(private val activity: Activity, private val onEvent: (key: Stri
             when (playbackState) {
                 Player.STATE_BUFFERING -> onEvent(key, "loading")
                 Player.STATE_READY -> onEvent(key, "playing")
+                // il flusso è finito (server che chiude): altro formato se c'è, altrimenti il riquadro si spegne
+                // invece di restare «in riproduzione» sull'ultimo fotogramma
+                Player.STATE_ENDED -> if (!tryAlt()) giveUp("ended")
+                // fermo senza un nostro comando (stop() azzera key prima): l'evento IDLE rimasto in coda dopo un
+                // errore già gestito si riconosce perché il lettore nel frattempo è ripartito
+                Player.STATE_IDLE -> if (player?.playbackState == Player.STATE_IDLE) giveUp("stopped")
                 else -> {}
             }
         }
@@ -48,22 +54,30 @@ class PreviewBox(private val activity: Activity, private val onEvent: (key: Stri
             if (key.isEmpty()) return
             // prima si prova l'altro formato del canale (HLS / MPEG-TS), poi il riquadro si arrende:
             // lo schermo intero ha il recupero automatico completo
-            if (urlIdx + 1 < urls.size) {
-                urlIdx++
-                player?.let {
-                    it.setMediaItem(Players.item(urls[urlIdx]))
-                    it.prepare()
-                    it.playWhenReady = true
-                }
-                return
-            }
-            try { player?.stop() } catch (_: Exception) {}
-            box?.visibility = View.GONE
-            onEvent(key, "error")
+            if (!tryAlt()) giveUp("error")
         }
     }
 
-    /** dati da Flutter: key, url, alt, x, y, w, h (punti logici), ua, lite */
+    private fun tryAlt(): Boolean {
+        if (urlIdx + 1 >= urls.size) return false
+        urlIdx++
+        val p = player ?: return false
+        p.setMediaItem(Players.item(urls[urlIdx]))
+        p.prepare()
+        p.playWhenReady = true
+        return true
+    }
+
+    /** il riquadro si spegne e Flutter riceve [state]; gli eventi successivi del lettore non contano più */
+    private fun giveUp(state: String) {
+        val k = key
+        key = ""
+        try { player?.stop() } catch (_: Exception) {}
+        box?.visibility = View.GONE
+        if (k.isNotEmpty()) onEvent(k, state)
+    }
+
+    /** dati da Flutter: key, url, alt, x, y, w, h (punti logici), ua, playerClass */
     fun show(data: String) {
         val j = try { JSONObject(data) } catch (_: Exception) { return }
         val url = j.optString("url")
@@ -83,7 +97,7 @@ class PreviewBox(private val activity: Activity, private val onEvent: (key: Stri
         val b = ensureBox()
         place(j)
         b.visibility = View.VISIBLE
-        val p = player ?: Players.build(activity, j.optString("ua").ifEmpty { "KairosPlus" }, live = true, lite = j.optBoolean("lite"), preview = true).also {
+        val p = player ?: Players.build(activity, j.optString("ua").ifEmpty { "KairosPlus" }, live = true, cls = Adaptive.effective(activity, j.optString("playerClass")), preview = true).also {
             it.addListener(listener)
             view?.player = it
             player = it

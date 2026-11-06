@@ -27,6 +27,7 @@ import androidx.media3.common.C
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlaybackException
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -44,7 +45,10 @@ import java.util.concurrent.Executors
  *
  * Diretta: ▲▼ (o CH+/CH−) cambia canale, i numeri vanno al canale, OK mostra le informazioni.
  * Film ed episodi: OK pausa, ◀▶ indietro/avanti (tenendo premuto accelera), l'episodio dopo parte da solo.
- * Se il flusso cade si riconnette da solo (1, 2, 4, 8 secondi), provando anche l'altro formato.
+ *
+ * Recupero (Kairos Adaptive, sezione 6): ai primi stalli non si riavvia nulla, si allarga il cuscinetto;
+ * il cambio di formato TS↔HLS avviene solo per errori della sorgente o se il TS continua a fermarsi;
+ * dopo 8 tentativi in 5 minuti si chiede al cliente («Riprova» o l'altro formato).
  */
 @OptIn(UnstableApi::class)
 class PlayerActivity : Activity() {
@@ -66,6 +70,8 @@ class PlayerActivity : Activity() {
         private val ACCENT = 0xFFA855F7.toInt()
         private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
         private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
+        private const val MAX_RETRIES = 8
+        private const val RETRY_WINDOW_MS = 5 * 60_000L
     }
 
     private class Item(
@@ -86,12 +92,17 @@ class PlayerActivity : Activity() {
     private var items: List<Item> = emptyList()
     private var idx = 0
     private var ua = "KairosPlus"
-    private var lite = false
+    private var devClass = "" // D | N | O (da Dart, altrimenti calcolata da Adaptive)
 
     private var player: ExoPlayer? = null
+    private var playerCls = -1 // classe effettiva con cui è stato costruito il lettore
+    private var profile = Adaptive.profile(Adaptive.NORMAL, true)
     private var pendingSeek = 0L
     private var urlIdx = 0
+    private var curFmt = "ts" // formato effettivo in uso (hls / ts / estensione del file)
     private var attempt = 0
+    private var retryPending = false // un nuovo tentativo è già in programma
+    private var statusTimed = false // messaggio di stato a tempo (non va tolto al READY)
     private var bufferingSince = 0L
     private var readyOnce = false
     private var errorShown = false
@@ -105,6 +116,29 @@ class PlayerActivity : Activity() {
     private var lastProgressEvent = 0L
     private val updates = LinkedHashMap<String, JSONObject>()
     private val clock = SimpleDateFormat("HH:mm", Locale.ITALY)
+
+    // --- stalli, cuscinetto e statistiche (Kairos Adaptive)
+    private var openAt = 0L
+    private var firstReadyAt = 0L // primo READY di questo avvio
+    private var transitionAt = 0L // ultimo seek / cambio traccia / nuovo prepare: il buffering che segue non è uno stallo
+    private var bufEligible = false // il buffering in corso conta come stallo
+    private var stallCounted = false
+    private var stallMs = 0L
+    private val stallLog = ArrayDeque<Pair<Long, Int>>() // (elapsedRealtime, indice del canale) dell'ultima ora
+    private val retryLog = ArrayDeque<Long>() // tentativi degli ultimi 5 minuti
+    private var longBuf = 0 // buffering lunghi consecutivi sullo stesso contenuto
+    private var behindLive = 0
+    private var holding = false // cuscinetto crescente: in pausa finché il buffer non è abbastanza pieno
+    private var holdTarget = 0L
+    private var holdStart = 0L
+    private var audioOff = false
+    private var lastGoodPos = 0L
+    private var endedAtPos = -1L
+    private var ttff = 0L
+    private var fill = 0.0
+    private var fillDone = false
+    private var fillB0 = 0L
+    private var lastStatsEvent = 0L
 
     private lateinit var pv: PlayerView
     private lateinit var topBox: LinearLayout
@@ -127,15 +161,23 @@ class PlayerActivity : Activity() {
 
     private val hideR = Runnable { hideOverlay() }
     private val tuneR = Runnable {
-        attempt = 0
-        urlIdx = 0
-        pendingSeek = 0
+        resetRecovery()
         open()
     }
     private val zapR = Runnable { commitZap() }
     private val retryR = Runnable { open() }
     private val seekR = Runnable { commitSeek() }
-    private val healthyR = Runnable { attempt = 0 }
+    private val holdR = Runnable { pollHold() }
+    private val statusHideR = Runnable {
+        statusV.visibility = View.GONE
+        statusTimed = false
+    }
+    // dopo 60 s di riproduzione buona i tentativi ripartono da zero (il tetto di 5 minuti resta)
+    private val healthyR = Runnable {
+        attempt = 0
+        longBuf = 0
+        behindLive = 0
+    }
     private val tickR = object : Runnable {
         override fun run() {
             tick()
@@ -203,7 +245,7 @@ class PlayerActivity : Activity() {
         try {
             val j = JSONObject(s)
             ua = j.optString("ua").ifEmpty { ua }
-            lite = j.optBoolean("lite", false)
+            devClass = j.optString("playerClass")
             val a = j.optJSONArray("items") ?: JSONArray()
             val list = ArrayList<Item>()
             for (i in 0 until a.length()) {
@@ -246,18 +288,35 @@ class PlayerActivity : Activity() {
 
     private val listener = object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
+            val now = SystemClock.elapsedRealtime()
             when (playbackState) {
                 Player.STATE_BUFFERING -> {
-                    if (bufferingSince == 0L) bufferingSince = SystemClock.elapsedRealtime()
+                    if (bufferingSince == 0L) {
+                        bufferingSince = now
+                        // stallo solo se il video andava da almeno 4 s e non è un seek / cambio traccia
+                        bufEligible = readyOnce && firstReadyAt > 0 && now - firstReadyAt >= 4_000 && now - transitionAt > 1_500
+                        stallCounted = false
+                    }
                     spin.visibility = View.VISIBLE
                 }
                 Player.STATE_READY -> {
+                    if (!readyOnce) {
+                        readyOnce = true
+                        firstReadyAt = now
+                        fillB0 = player?.bufferedPosition ?: 0L
+                    } else if (bufferingSince > 0) {
+                        val d = now - bufferingSince
+                        if (!stallCounted && bufEligible && d >= 1_000) noteStall(now)
+                        if (stallCounted) {
+                            stallMs += d
+                            afterStall(now)
+                        }
+                    }
                     bufferingSince = 0L
-                    readyOnce = true
-                    spin.visibility = View.GONE
-                    statusV.visibility = View.GONE
+                    if (!holding) spin.visibility = View.GONE
+                    if (!statusTimed) statusV.visibility = View.GONE
                     h.removeCallbacks(healthyR)
-                    h.postDelayed(healthyR, 15_000)
+                    h.postDelayed(healthyR, 60_000)
                 }
                 Player.STATE_ENDED -> onEnded()
                 else -> {}
@@ -269,30 +328,48 @@ class PlayerActivity : Activity() {
             updatePause()
         }
 
+        override fun onRenderedFirstFrame() {
+            if (ttff == 0L && openAt > 0) ttff = SystemClock.elapsedRealtime() - openAt
+        }
+
         override fun onPlayerError(error: PlaybackException) {
             onError(error)
         }
     }
 
+    /** classe effettiva ricalcolata a ogni avvio: se cambia, il lettore si ricostruisce con i buffer giusti */
     private fun ensurePlayer(): ExoPlayer {
-        player?.let { return it }
-        val p = Players.build(this, ua, items.any { it.live }, lite)
+        val live = items.any { it.live }
+        val cls = Adaptive.effective(this, devClass)
+        player?.let {
+            if (cls == playerCls) return it
+            releasePlayer()
+        }
+        profile = Adaptive.profile(cls, live)
+        val p = Players.build(this, ua, live, cls)
         p.addListener(listener)
         pv.player = p
         player = p
+        playerCls = cls
+        audioOff = false
         return p
     }
 
     private fun releasePlayer() {
         val p = player ?: return
         player = null
+        holding = false
         p.removeListener(listener)
         if (::pv.isInitialized) pv.player = null
         p.release()
+        Adaptive.mode = Adaptive.Mode.NONE
+        Adaptive.save(this, force = true)
     }
 
     private fun open() {
         h.removeCallbacks(retryR)
+        h.removeCallbacks(holdR)
+        holding = false
         val item = cur()
         msgV.visibility = View.GONE
         errorShown = false
@@ -301,11 +378,24 @@ class PlayerActivity : Activity() {
             return
         }
         val url = item.urls[urlIdx % item.urls.size]
+        curFmt = Players.format(url, item.live)
+        retryPending = false
         val p = ensurePlayer()
-        bufferingSince = SystemClock.elapsedRealtime()
+        // da qui i trasferimenti del lettore contano (o no) per la misura della banda
+        Adaptive.mode = Adaptive.modeFor(url, item.live)
+        val now = SystemClock.elapsedRealtime()
+        openAt = now
+        bufferingSince = now
         readyOnce = false
+        firstReadyAt = 0L
+        bufEligible = false
+        stallCounted = false
+        ttff = 0L
+        fillDone = false
+        lastStatsEvent = now
         spin.visibility = View.VISIBLE
         val start = if (!item.live && pendingSeek > 0) pendingSeek else C.TIME_UNSET
+        lastGoodPos = if (start == C.TIME_UNSET) 0L else start
         pendingSeek = 0
         p.setMediaItem(Players.item(url), start)
         p.prepare()
@@ -315,70 +405,221 @@ class PlayerActivity : Activity() {
         event("playing")
     }
 
-    private fun onError(e: PlaybackException) {
-        val item = cur()
-        if (item.live && e.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
-            player?.let {
-                it.seekToDefaultPosition()
-                it.prepare()
-            }
-            return
-        }
-        if (!item.live) player?.currentPosition?.let { if (it > 0) pendingSeek = it }
-        scheduleRetry()
+    /** nuovo canale o titolo: tentativi, formato e contatori ripartono da zero */
+    private fun resetRecovery() {
+        attempt = 0
+        urlIdx = 0
+        pendingSeek = 0
+        longBuf = 0
+        behindLive = 0
+        endedAtPos = -1L
+        retryLog.clear()
+        restoreAudio()
     }
 
-    private fun scheduleRetry() {
-        h.removeCallbacks(retryR)
-        h.removeCallbacks(healthyR)
-        bufferingSince = 0L
-        if (attempt >= RETRY.size) {
-            showError("Impossibile riprodurre questo contenuto")
+    private fun restoreAudio() {
+        if (!audioOff) return
+        audioOff = false
+        player?.let { it.trackSelectionParameters = it.trackSelectionParameters.buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, false).build() }
+    }
+
+    /** errore del decoder audio (AC-3 / MP2 assenti sulle chiavette): il video deve continuare */
+    private fun isAudioDecoderError(e: PlaybackException): Boolean {
+        val mime = (e as? ExoPlaybackException)?.rendererFormat?.sampleMimeType ?: return false
+        if (!mime.startsWith("audio/")) return false
+        return when (e.errorCode) {
+            PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+            PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
+            PlaybackException.ERROR_CODE_AUDIO_TRACK_INIT_FAILED -> true
+            else -> false
+        }
+    }
+
+    private fun onError(e: PlaybackException) {
+        val item = cur()
+        val p = player
+        val code = e.errorCode
+        if (item.live && code == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
+            behindLive++
+            if (behindLive <= 3 && p != null) {
+                transitionAt = SystemClock.elapsedRealtime()
+                p.seekToDefaultPosition()
+                p.prepare()
+                return
+            }
+            // ricade sempre dietro la finestra: si prova l'altro formato
+            event("error", JSONObject().put("code", code))
+            scheduleRetry(switchFormat = true)
             return
         }
-        val delay = RETRY[attempt]
+        if (!audioOff && p != null && isAudioDecoderError(e)) {
+            audioOff = true
+            p.trackSelectionParameters = p.trackSelectionParameters.buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true).build()
+            transitionAt = SystemClock.elapsedRealtime()
+            p.prepare()
+            p.playWhenReady = true
+            status("Audio non supportato da questo dispositivo: video senza audio", 8_000)
+            event("error", JSONObject().put("code", code).put("audioOff", true))
+            return
+        }
+        if (!item.live) p?.currentPosition?.let { if (it > 0) pendingSeek = it }
+        event("error", JSONObject().put("code", code))
+        // solo gli errori della sorgente (IO_*, PARSING_*, formato non riconosciuto) fanno cambiare formato
+        scheduleRetry(switchFormat = code in 2000..3999)
+    }
+
+    private fun scheduleRetry(switchFormat: Boolean, text: String = "Connessione persa, riprovo…") {
+        h.removeCallbacks(retryR)
+        h.removeCallbacks(healthyR)
+        h.removeCallbacks(holdR)
+        holding = false
+        bufferingSince = 0L
+        val now = SystemClock.elapsedRealtime()
+        while (retryLog.isNotEmpty() && now - retryLog.first() > RETRY_WINDOW_MS) retryLog.removeFirst()
+        if (retryLog.size >= MAX_RETRIES) {
+            showError("Il flusso continua a interrompersi")
+            return
+        }
+        retryLog.addLast(now)
+        val delay = RETRY[attempt.coerceAtMost(RETRY.size - 1)]
         attempt++
-        // c'è un formato alternativo (HLS / MPEG-TS): si prova anche quello
-        if (cur().urls.size > 1) urlIdx++
-        statusV.text = "Connessione persa, riprovo…"
-        statusV.visibility = View.VISIBLE
+        if (switchFormat && cur().urls.size > 1) urlIdx++
+        status(text, 0)
+        retryPending = true
         h.postDelayed(retryR, delay)
+    }
+
+    private fun status(text: String, hideAfterMs: Long) {
+        statusV.text = text
+        statusV.visibility = View.VISIBLE
+        statusTimed = hideAfterMs > 0
+        h.removeCallbacks(statusHideR)
+        if (statusTimed) h.postDelayed(statusHideR, hideAfterMs)
     }
 
     private fun retryNow() {
         attempt = 0
-        urlIdx = 0
+        retryLog.clear()
         open()
+    }
+
+    /** dalla schermata di errore: stesso contenuto con l'altro formato (HLS / TS) */
+    private fun retryAlt() {
+        attempt = 0
+        retryLog.clear()
+        urlIdx++
+        open()
+    }
+
+    /** nome dell'altro formato disponibile (per i suggerimenti), null se non c'è */
+    private fun altName(): String? {
+        val item = cur()
+        if (item.urls.size < 2) return null
+        return if (Players.isHls(item.urls[(urlIdx + 1) % item.urls.size])) "HLS" else "TS"
     }
 
     private fun showError(m: String) {
         errorShown = true
         h.removeCallbacks(retryR)
+        h.removeCallbacks(holdR)
+        retryPending = false
+        holding = false
         bufferingSince = 0L
         spin.visibility = View.GONE
         statusV.visibility = View.GONE
         pauseV.visibility = View.GONE
         player?.stop()
-        val hint = if (cur().live && items.size > 1) "OK per riprovare  ·  ▲▼ altro canale  ·  Indietro per uscire"
-        else "OK per riprovare  ·  Indietro per uscire"
+        val hint = buildString {
+            append("OK per riprovare")
+            altName()?.let { append("  ·  ▶ prova in $it") }
+            if (cur().live && items.size > 1) append("  ·  ▲▼ altro canale")
+            append("  ·  Indietro per uscire")
+        }
         msgV.text = m + "\n\n" + hint
         msgV.visibility = View.VISIBLE
+    }
+
+    /* ---------------- stalli e cuscinetto crescente ---------------- */
+
+    private fun noteStall(now: Long) {
+        stallCounted = true
+        stallLog.addLast(Pair(now, idx))
+        while (stallLog.isNotEmpty() && now - stallLog.first().first > 3_600_000L) stallLog.removeFirst()
+        Adaptive.registerStall(this, cur().key)
+        event("stall")
+        // TS che continua a fermarsi (dal 3º stallo in 2 minuti sullo stesso canale): si passa all'HLS
+        val recent = stallLog.count { it.second == idx && now - it.first <= 120_000L }
+        if (curFmt == "ts" && recent >= 3 && cur().urls.size > 1) {
+            if (!cur().live) player?.currentPosition?.let { if (it > 0) pendingSeek = it }
+            scheduleRetry(switchFormat = true, text = "Flusso instabile, provo in HLS…")
+        }
+    }
+
+    /** tornati in READY dopo uno stallo: in pausa finché il cuscinetto non cresce (2 s × stalli, max +6 s) */
+    private fun afterStall(now: Long) {
+        val p = player ?: return
+        if (errorShown || retryPending) return
+        val n = stallLog.count { it.second == idx && now - it.first <= 90_000L }
+        val target = profile.rebufferMs + (2_000L * n).coerceAtMost(6_000L)
+        if (p.totalBufferedDuration >= target) return
+        holding = true
+        holdTarget = target
+        holdStart = now
+        p.playWhenReady = false
+        spin.visibility = View.VISIBLE
+        h.removeCallbacks(holdR)
+        h.postDelayed(holdR, 250)
+    }
+
+    private fun pollHold() {
+        if (!holding) return
+        val p = player
+        val now = SystemClock.elapsedRealtime()
+        val done = p == null || errorShown || p.playbackState != Player.STATE_READY ||
+            p.totalBufferedDuration >= holdTarget || now - holdStart >= 15_000
+        if (!done) {
+            h.postDelayed(holdR, 250)
+            return
+        }
+        holding = false
+        if (p != null && !errorShown) {
+            p.playWhenReady = true
+            if (p.playbackState == Player.STATE_READY) spin.visibility = View.GONE
+        }
+        updatePause()
+    }
+
+    private fun cancelHold() {
+        if (!holding) return
+        holding = false
+        h.removeCallbacks(holdR)
+        if (player?.playbackState == Player.STATE_READY) spin.visibility = View.GONE
     }
 
     private fun onEnded() {
         val item = cur()
         if (item.live) {
-            scheduleRetry()
+            scheduleRetry(switchFormat = false)
             return
         }
-        val dur = player?.duration ?: 0L
+        val p = player
+        val dur = p?.duration ?: 0L
+        val pos = p?.currentPosition ?: 0L
+        // il server ha chiuso la transcodifica prima della fine: si riprende dall'ultima posizione buona
+        // (se da lì non si avanza più, è davvero la fine)
+        if ((dur <= 0 || pos < dur / 10 * 9) && lastGoodPos > 0 && (endedAtPos < 0 || lastGoodPos - endedAtPos >= 5_000)) {
+            endedAtPos = lastGoodPos
+            pendingSeek = lastGoodPos
+            scheduleRetry(switchFormat = false, text = "Flusso interrotto, riprendo…")
+            return
+        }
         if (dur > 0) record(item, dur, dur)
         updates[item.key]?.let { event("progress", it) }
         if (idx + 1 < items.size) {
             idx++
-            attempt = 0
-            urlIdx = 0
-            pendingSeek = 0
+            resetRecovery()
             showOverlay()
             open()
         } else {
@@ -402,26 +643,39 @@ class PlayerActivity : Activity() {
     private fun tick() {
         val p = player
         val item = cur()
-        // flusso bloccato: caricamento troppo lungo → riconnessione
-        if (p != null && !errorShown && bufferingSince > 0 && p.playWhenReady) {
-            val limit = if (!readyOnce) 25_000L else if (item.live) 12_000L else 20_000L
-            if (SystemClock.elapsedRealtime() - bufferingSince > limit) {
+        val now = SystemClock.elapsedRealtime()
+        if (p != null && !errorShown && bufferingSince > 0 && p.playWhenReady && !holding) {
+            // stallo confermato dopo 1 s di buffering
+            if (!stallCounted && bufEligible && now - bufferingSince >= 1_000) noteStall(now)
+            // buffering lungo: prima si ricarica lo stesso indirizzo, se si ripete in TS si passa all'HLS
+            val limit = if (!readyOnce) 20_000L else if (item.live) 12_000L else 20_000L
+            if (!retryPending && now - bufferingSince > limit) {
                 if (!item.live && p.currentPosition > 0) pendingSeek = p.currentPosition
-                scheduleRetry()
+                longBuf++
+                scheduleRetry(switchFormat = curFmt == "ts" && longBuf >= 2)
             }
+        }
+        if (p != null && readyOnce && p.playbackState == Player.STATE_READY && p.currentPosition > 0) lastGoodPos = p.currentPosition
+        // fill-ratio: secondi di video scaricati per secondo reale nei primi 10 s (TS: < 1 ⇒ la linea non regge)
+        if (p != null && !fillDone && firstReadyAt > 0 && now - firstReadyAt >= 10_000) {
+            fillDone = true
+            fill = (p.bufferedPosition - fillB0).toDouble() / (now - firstReadyAt)
         }
         if (overlayShown()) updateTexts()
         if (!item.live) {
             savePos()
-            val now = SystemClock.elapsedRealtime()
             if (now - lastProgressEvent > 10_000) {
                 lastProgressEvent = now
                 updates[item.key]?.let { event("progress", it) }
             }
-        } else if (item.epg.isNotEmpty() && SystemClock.elapsedRealtime() - epgAt > 60_000 &&
-            progs.none { it.end > System.currentTimeMillis() }
-        ) {
-            loadEpg(item) // il programma in onda è finito: guida aggiornata
+        } else {
+            if (now - lastStatsEvent > 30_000) {
+                lastStatsEvent = now
+                event("stats")
+            }
+            if (item.epg.isNotEmpty() && now - epgAt > 60_000 && progs.none { it.end > System.currentTimeMillis() }) {
+                loadEpg(item) // il programma in onda è finito: guida aggiornata
+            }
         }
     }
 
@@ -455,6 +709,7 @@ class PlayerActivity : Activity() {
         msgV.visibility = View.GONE
         statusV.visibility = View.GONE
         errorShown = false
+        cancelHold()
         player?.pause()
         showOverlay()
         h.removeCallbacks(tuneR)
@@ -484,8 +739,7 @@ class PlayerActivity : Activity() {
         idx = i
         epgSeq++
         progs = emptyList()
-        attempt = 0
-        urlIdx = 0
+        resetRecovery()
         showOverlay()
         open()
     }
@@ -510,19 +764,29 @@ class PlayerActivity : Activity() {
     private fun commitSeek() {
         val t = seekTarget
         seekTarget = -1
-        if (t >= 0) player?.seekTo(t)
+        if (t >= 0) {
+            cancelHold()
+            transitionAt = SystemClock.elapsedRealtime()
+            player?.seekTo(t)
+        }
         updatePause()
         if (overlayShown()) updateTexts()
     }
 
     private fun togglePlay() {
         val p = player ?: return
-        if (p.playWhenReady) pause() else p.play()
+        if (p.playWhenReady) {
+            pause()
+        } else {
+            cancelHold()
+            p.play()
+        }
         showOverlay()
     }
 
     private fun pause() {
         val p = player ?: return
+        cancelHold()
         p.pause()
         savePos()
         updates[cur().key]?.let { event("progress", it) }
@@ -531,13 +795,13 @@ class PlayerActivity : Activity() {
     private fun updatePause() {
         if (!::pauseV.isInitialized) return
         val p = player
-        val paused = p != null && !cur().live && !p.playWhenReady && p.playbackState == Player.STATE_READY
+        val paused = p != null && !cur().live && !p.playWhenReady && !holding && p.playbackState == Player.STATE_READY
         pauseV.visibility = if (paused && seekTarget < 0 && !errorShown) View.VISIBLE else View.GONE
     }
 
     private fun isPausedVod(): Boolean {
         val p = player ?: return false
-        return !cur().live && !p.playWhenReady
+        return !cur().live && !p.playWhenReady && !holding
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
@@ -549,9 +813,15 @@ class PlayerActivity : Activity() {
         }
         val item = cur()
         val ok = keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER
-        if (errorShown && ok) {
-            if (repeat == 0) retryNow()
-            return true
+        if (errorShown) {
+            if (ok) {
+                if (repeat == 0) retryNow()
+                return true
+            }
+            if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && altName() != null) {
+                if (repeat == 0) retryAlt()
+                return true
+            }
         }
         if (item.live) {
             when (keyCode) {
@@ -582,7 +852,7 @@ class PlayerActivity : Activity() {
         }
         when (keyCode) {
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { if (repeat == 0) togglePlay(); return true }
-            KeyEvent.KEYCODE_MEDIA_PLAY -> { if (repeat == 0) { player?.play(); showOverlay() }; return true }
+            KeyEvent.KEYCODE_MEDIA_PLAY -> { if (repeat == 0) { cancelHold(); player?.play(); showOverlay() }; return true }
             KeyEvent.KEYCODE_MEDIA_PAUSE -> { if (repeat == 0) { pause(); showOverlay() }; return true }
         }
         return super.onKeyDown(keyCode, event)
@@ -616,7 +886,7 @@ class PlayerActivity : Activity() {
         savePos()
         val arr = JSONArray()
         updates.values.forEach { arr.put(it) }
-        val out = JSONObject().put("index", idx).put("kicked", kicked).put("updates", arr)
+        val out = JSONObject().put("index", idx).put("kicked", kicked).put("updates", arr).put("stats", stats())
         setResult(RESULT_OK, Intent().putExtra("result", out.toString()))
         finish()
     }
@@ -629,7 +899,27 @@ class PlayerActivity : Activity() {
         return super.onTouchEvent(event)
     }
 
-    /** eventi per Flutter: canale in onda (pannello «Online ora») e posizione di visione */
+    /** misure per il pannello (sezione 9): banda, classi, fill-ratio, primo fotogramma, stalli, formato, frame persi */
+    private fun stats(): JSONObject {
+        val o = JSONObject()
+        val bw = Adaptive.bitrate
+        if (bw > 0) o.put("bw", Math.round(bw / 100_000.0) / 10.0)
+        o.put("line", Adaptive.lineName(this)).put("dev", devClass.ifEmpty { Adaptive.deviceClass(this) })
+            .put("fmt", curFmt).put("net", Adaptive.netType(this)).put("stallMs", stallMs)
+        if (fillDone) o.put("fill", Math.round(fill * 100) / 100.0)
+        if (ttff > 0) o.put("ttff", ttff)
+        val now = SystemClock.elapsedRealtime()
+        o.put("stalls10", stallLog.count { now - it.first <= 600_000L }).put("stallsH", stallLog.size)
+        val c = player?.videoDecoderCounters
+        if (c != null) {
+            c.ensureUpdated()
+            val total = c.renderedOutputBufferCount + c.droppedBufferCount
+            if (total > 0) o.put("drop", Math.round(c.droppedBufferCount * 1000.0 / total) / 10.0)
+        }
+        return o
+    }
+
+    /** eventi per Flutter: canale in onda (pannello «Online ora»), posizione di visione, misure di rete */
     private fun event(type: String, extra: JSONObject? = null) {
         val ch = MainActivity.channel ?: return
         val item = items.getOrNull(idx) ?: return
@@ -637,6 +927,7 @@ class PlayerActivity : Activity() {
             val o = if (extra != null) JSONObject(extra.toString()) else JSONObject()
             o.put("type", type).put("index", idx).put("key", item.key).put("live", item.live)
                 .put("title", item.title).put("kind", item.kind).put("chId", item.chId).put("group", item.group)
+                .put("stats", stats())
             ch.invokeMethod("playerEvent", o.toString())
         } catch (_: Exception) {}
     }

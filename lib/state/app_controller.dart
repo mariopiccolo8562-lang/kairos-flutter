@@ -9,13 +9,13 @@ import '../app/perf.dart';
 import '../core/json.dart';
 import '../core/native.dart';
 import '../core/net.dart' as net;
-import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 
 import '../data/catalog_repository.dart';
 import '../data/models.dart';
 import '../data/sources/content_source.dart';
 import '../data/user_store.dart';
 import '../panel/panel.dart';
+import '../ui/widgets/net_image.dart';
 import 'app_updater.dart';
 
 enum SessionStatus { starting, activation, loading, ready, error }
@@ -40,10 +40,13 @@ class PreviewState {
   /// Canale nel riquadro (null = nessuno).
   final String? key;
 
-  /// idle | loading | playing | error
+  /// idle | loading | playing | error | ended
   final String status;
 
   bool isFor(String channelKey) => key == channelKey;
+
+  /// Il riquadro sta davvero caricando o riproducendo (con error / ended il decoder è fermo).
+  bool get active => key != null && (status == 'loading' || status == 'playing');
 }
 
 /// Cosa si sta guardando (per «Online ora» nel pannello).
@@ -227,7 +230,7 @@ class AppController {
       currentVersion: device.version,
       backgroundEnabled: () => bgUpdate,
       forceDays: () => switch (_rc['force']?.toString()) { 'now' => 0, '3d' => 3, '7d' => 7, _ => null },
-      watching: () => _watching != null || _inPlayer,
+      watching: () => _watching != null || _busyWatching,
       loadFirstSeen: _store.loadUpdFirst,
       saveFirstSeen: _store.saveUpdFirst,
     );
@@ -597,11 +600,22 @@ class AppController {
   /// Aggiornamento chiesto dall'utente: le novità si vedono subito.
   Future<String?> refreshCatalog() => _fetchAndApply();
 
+  /// Un solo scaricamento del catalogo alla volta: chi lo chiede mentre è in corso
+  /// (aggiornamento in background e «Aggiorna» insieme) aspetta lo stesso Future.
+  Future<Catalog>? _fetching;
+  bool _refreshDeferred = false;
+
+  Future<Catalog> _fetchShared(Account account) {
+    return _fetching ??= CatalogRepository.fetch(account, favorites: _favorites).whenComplete(() {
+      _fetching = null;
+    });
+  }
+
   Future<String?> _fetchAndApply() async {
     final account = _account;
     if (account == null) return 'Nessuna playlist configurata';
     try {
-      final fresh = await CatalogRepository.fetch(account, favorites: _favorites);
+      final fresh = await _fetchShared(account);
       if (fresh.isEmpty) return 'La playlist non contiene contenuti';
       catalog.value = fresh;
       return null;
@@ -614,14 +628,40 @@ class AppController {
 
   /// Aggiorna la cache su disco senza toccare quello che l'utente sta
   /// guardando: le novità compaiono al prossimo avvio, senza salti di focus.
+  /// Mai durante la visione (schermo intero o riquadro): riparte alla chiusura del lettore.
   Future<void> _refreshInBackground() async {
     final account = _account;
     if (account == null) return;
+    if (_busyWatching) {
+      _refreshDeferred = true;
+      return;
+    }
+    _refreshDeferred = false;
     try {
-      await CatalogRepository.fetch(account, favorites: _favorites);
+      await _fetchShared(account);
     } on Object {
       // silenzioso: il catalogo in cache resta valido
     }
+  }
+
+  /// Un lettore è attivo (schermo intero o anteprima): niente lavori di fondo.
+  bool get _busyWatching => _inPlayer || preview.value.active;
+
+  /// La visione è finita: ripartono i lavori rimandati (catalogo, APK, stato del pannello).
+  Future<void> _resumeDeferred() async {
+    if (_busyWatching) return;
+    if (_refreshDeferred) unawaited(_refreshInBackground());
+    if (_updaterStarted) updater.onPlaybackEnded();
+    final deferred = _deferredState;
+    if (deferred != null) {
+      _deferredState = null;
+      await _applyState(deferred);
+    }
+  }
+
+  /// È partita una visione: il download dell'APK in corso si ferma.
+  void _onWatchStart() {
+    if (_updaterStarted) updater.onPlaybackStarted();
   }
 
   // ---------------------------------------------------------------------------
@@ -639,6 +679,8 @@ class AppController {
   int _kickAck = 0;
   String _pv = '';
   bool _beating = false;
+  // ultime misure del lettore (banda, classi, stalli…): vanno al pannello nel battito
+  Map<String, Object?> _stats = const <String, Object?>{};
 
   void _startPulse() {
     if (_pulseTimer != null) return;
@@ -677,6 +719,7 @@ class AppController {
         kickAck: _kickAck,
         cfg: remoteSnapshot(),
         rcv: _rcv,
+        stats: _stats,
       );
       if (j != null) await _handleBeat(j);
     } finally {
@@ -742,21 +785,26 @@ class AppController {
 
   /// Apre il lettore. Restituisce un messaggio se la visione non è consentita.
   Future<String?> play(List<PlaybackItem> items, int index, {Duration? resumeAt}) async {
-    if (items.isEmpty) return null;
+    // un lettore già aperto (doppio OK, comando dal pannello): niente seconda PlayerActivity
+    if (items.isEmpty || _inPlayer) return null;
     final i = index < 0 ? 0 : (index >= items.length ? items.length - 1 : index);
     final item = items[i];
+    _inPlayer = true; // da subito: ferma i lavori di fondo e le richieste doppie già durante il controllo del pannello
     final panel = _panel;
     if (panel != null && (_state?.account?.maxStreams ?? 0) > 0) {
       final block = await panel.stream(item.watchState, item.title);
-      if (block != null) return block;
+      if (block != null) {
+        _inPlayer = false;
+        return block;
+      }
     }
     // un solo video alla volta: il riquadro si chiude prima dello schermo intero
     _previewSeq++;
     preview.value = const PreviewState.idle();
-    _inPlayer = true;
     _playing = items;
     _watching = _Watch.of(item);
     _playerVisible = true;
+    _onWatchStart();
     unawaited(_beat(true));
     Map<String, dynamic>? result;
     try {
@@ -766,6 +814,7 @@ class AppController {
         'resumeMs': resumeAt?.inMilliseconds ?? 0,
         'ua': net.userAgent,
         'lite': lite,
+        'playerClass': device.playerClass,
       });
     } on PlatformException catch (e) {
       return e.message ?? 'Lettore non disponibile';
@@ -774,6 +823,8 @@ class AppController {
       _playerVisible = false;
       _inPlayer = false;
     }
+    final finalStats = asMap(result?['stats']);
+    if (finalStats.isNotEmpty) _stats = finalStats;
     for (final raw in asList(result?['updates'])) {
       final m = asMap(raw);
       final key = asString(m['key']);
@@ -783,13 +834,10 @@ class AppController {
     }
     _playing = const <PlaybackItem>[];
     progressRevision.value++;
-    _lastBeat = -1; // si torna a «nessuna visione» subito
+    _lastBeat = -1; // si torna a «nessuna visione» subito (con le misure finali del lettore)
     unawaited(_beat(true));
-    final deferred = _deferredState;
-    if (deferred != null) {
-      _deferredState = null;
-      await _applyState(deferred);
-    }
+    _stats = const <String, Object?>{};
+    await _resumeDeferred();
     return null;
   }
 
@@ -801,6 +849,8 @@ class AppController {
   }
 
   void _onPlayerEvent(PlayerEvent e) {
+    final stats = e.stats;
+    if (stats.isNotEmpty) _stats = stats;
     switch (e.type) {
       case 'playing':
         {
@@ -844,6 +894,7 @@ class AppController {
     }
     if (seq != _previewSeq) return null;
     _watching = _Watch.of(item);
+    _onWatchStart();
     unawaited(_beat(true));
     await NativeBridge.previewShow({
       'key': item.key,
@@ -855,6 +906,7 @@ class AppController {
       'h': rect.height,
       'ua': net.userAgent,
       'lite': lite,
+      'playerClass': device.playerClass,
     });
     return null;
   }
@@ -871,7 +923,10 @@ class AppController {
   }
 
   void _clearPreviewWatch() {
-    if (_inPlayer || _watching?.state != 'live') return;
+    if (_inPlayer) return;
+    // i lavori rimandati ripartono tra poco: se nel frattempo si apre lo schermo intero restano in attesa
+    Timer(const Duration(seconds: 2), () => unawaited(_resumeDeferred()));
+    if (_watching?.state != 'live') return;
     _watching = null;
     unawaited(_beat(true));
   }
@@ -886,6 +941,10 @@ class AppController {
         preview.value = PreviewState(e.key, 'playing');
       case 'error':
         preview.value = PreviewState(e.key, 'error');
+        _clearPreviewWatch();
+      case 'ended':
+        // trasmissione finita: il riquadro si è spento da solo
+        preview.value = PreviewState(e.key, 'ended');
         _clearPreviewWatch();
       case 'stopped':
         preview.value = const PreviewState.idle();
@@ -975,11 +1034,7 @@ class AppController {
           remoteCmd.value = 'reload';
         case 'cache':
           await CatalogRepository.clearCache();
-          try {
-            await DefaultCacheManager().emptyCache();
-          } on Object {
-            // cache già vuota
-          }
+          await NetImageCache.clear();
           PaintingBinding.instance.imageCache.clear();
           await panel.cmdAck(id, true, 'cache svuotata');
           remoteCmd.value = 'reload';
@@ -1201,6 +1256,7 @@ class AppController {
   void dispose() {
     _activationTimer?.cancel();
     _stopPulse();
+    net.closeClient();
     _lifecycle?.dispose();
     unawaited(_playerSub?.cancel());
     unawaited(_previewSub?.cancel());

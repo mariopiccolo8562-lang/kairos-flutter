@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 
 import '../../app/app_scope.dart';
 import '../../app/brand.dart';
@@ -9,6 +8,7 @@ import '../../core/format.dart';
 import '../../data/models.dart';
 import '../../panel/panel.dart';
 import '../navigation.dart';
+import '../widgets/net_image.dart';
 import '../widgets/tv_focusable.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -41,7 +41,7 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _clearImages() async {
-    await DefaultCacheManager().emptyCache();
+    await NetImageCache.clear();
     PaintingBinding.instance.imageCache.clear();
     if (mounted) setState(() => _cacheMessage = 'Cache svuotata');
   }

@@ -337,6 +337,7 @@ class PanelClient {
   }
 
   /// Battito per «Online ora» e per i comandi del pannello (Disconnetti, cambi…).
+  /// [stats]: misure del lettore (Kairos Adaptive, sezione 9): bw, line, dev, fill, ttff, stallMs, fmt, drop, net.
   Future<Map<String, dynamic>?> heartbeat({
     required String state,
     String title = '',
@@ -347,6 +348,7 @@ class PanelClient {
     int kickAck = 0,
     Map<String, Object?> cfg = const {},
     String rcv = '',
+    Map<String, Object?> stats = const {},
   }) async {
     try {
       final r = await _post('/api/player/heartbeat', {
@@ -362,10 +364,11 @@ class PanelClient {
         'ui': '',
         'model': model,
         'screen': screen.length > 20 ? screen.substring(0, 20) : screen,
-        'net': {'type': ''},
+        'net': {'type': asString(stats['net']) ?? ''},
         'vpn': 'off',
         'cfg': cfg, // controllo remoto: impostazioni attuali dell'app
         'rcv': rcv, // configurazione del pannello applicata
+        if (stats.isNotEmpty) 'stats': stats, // banda, classi, stalli, formato del lettore
         if (kickAck > 0) 'kickAck': kickAck,
       });
       return r.status == 200 ? r.body : null;

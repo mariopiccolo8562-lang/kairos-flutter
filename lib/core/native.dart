@@ -17,6 +17,7 @@ class DeviceInfo {
     this.totalMemMb = 0,
     this.version = '',
     this.versionCode = 0,
+    this.nativePlayerClass = '',
   });
 
   final String model; // es. "Amazon AFTMM"
@@ -27,10 +28,20 @@ class DeviceInfo {
   final int totalMemMb;
   final String version; // versione dell'app, es. "0.1.7"
   final int versionCode; // numero di versione (cresce a ogni compilazione)
+  final String nativePlayerClass; // D | N | O calcolata da Android (vuota con le versioni native vecchie)
 
   /// Grafica leggera in automatico: chiavette con poca memoria e tutte le Fire TV
   /// (modelli «AFT…»), dove conta la velocità più degli effetti.
   bool get isLite => lowRam || (totalMemMb > 0 && totalMemMb < 1800) || rawModel.toUpperCase().startsWith('AFT');
+
+  /// Classe del dispositivo per il lettore (Kairos Adaptive), separata dalla grafica leggera:
+  /// D = debole (≤ 1,2 GB o Android < 7), O = ottimo (≥ 2 GB e Android ≥ 9), N = il resto.
+  String get playerClass {
+    if (nativePlayerClass == 'D' || nativePlayerClass == 'N' || nativePlayerClass == 'O') return nativePlayerClass;
+    if (lowRam || (sdk > 0 && sdk < 24) || (totalMemMb > 0 && totalMemMb <= 1228)) return 'D';
+    if (totalMemMb >= 1900 && sdk >= 28) return 'O';
+    return 'N';
+  }
 
   static DeviceInfo fromMap(Object? raw) {
     final m = asMap(raw);
@@ -43,6 +54,7 @@ class DeviceInfo {
       totalMemMb: asInt(m['totalMemMb']) ?? 0,
       version: asString(m['version']) ?? '',
       versionCode: asInt(m['versionCode']) ?? 0,
+      nativePlayerClass: asString(m['playerClass']) ?? '',
     );
   }
 }
@@ -51,7 +63,7 @@ class DeviceInfo {
 class PlayerEvent {
   const PlayerEvent(this.type, this.data);
 
-  final String type; // playing | progress | background | foreground
+  final String type; // playing | progress | stats | stall | error | background | foreground
   final Map<String, dynamic> data;
 
   String get key => asString(data['key']) ?? '';
@@ -59,6 +71,9 @@ class PlayerEvent {
   bool get live => data['live'] == true;
   int get position => asInt(data['pos']) ?? 0;
   int get duration => asInt(data['dur']) ?? 0;
+
+  /// Misure di rete del lettore (bw, line, dev, fill, ttff, stallMs, fmt, drop…), per il pannello.
+  Map<String, dynamic> get stats => asMap(data['stats']);
 }
 
 /// Stato dell'anteprima di un canale (riquadro della TV in diretta).
@@ -66,7 +81,7 @@ class PreviewEvent {
   const PreviewEvent(this.key, this.state);
 
   final String key;
-  final String state; // loading | playing | error | stopped
+  final String state; // loading | playing | error | ended | stopped
 }
 
 /// Ponte con la parte Android: informazioni sul dispositivo, lettore nativo e anteprima.
@@ -137,6 +152,15 @@ abstract final class NativeBridge {
     }
   }
 
+  /// È partita la visione: il download in background dell'APK si interrompe (evento deferred).
+  static Future<void> updateCancel() async {
+    try {
+      await _channel.invokeMethod<Object?>('updateCancel');
+    } on Object {
+      // nessun download in corso
+    }
+  }
+
   /// Installa: subito se l'APK è pronto, altrimenti lo scarica (eventi progress) e apre l'installer.
   static Future<void> updateInstall(String url, int code) async {
     _listen();
@@ -170,7 +194,7 @@ abstract final class NativeBridge {
     }
   }
 
-  /// Fa partire un canale nel riquadro dell'anteprima ([data]: key, url, alt, x, y, w, h, ua, lite).
+  /// Fa partire un canale nel riquadro dell'anteprima ([data]: key, url, alt, x, y, w, h, ua, playerClass).
   static Future<void> previewShow(Map<String, Object?> data) async {
     _listen();
     try {
