@@ -1,0 +1,204 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
+
+import '../core/json.dart';
+import '../core/native.dart';
+import '../core/net.dart' as net;
+
+/// Versione nuova trovata nel feed delle release.
+class UpdateInfo {
+  const UpdateInfo({required this.code, required this.version, required this.url});
+
+  final int code;
+  final String version;
+  final String url;
+}
+
+/// Aggiornamento dell'app (Kairos Plus).
+/// - Il feed kairos-plus.json della release più recente dice qual è l'ultima versione.
+/// - Aggiornamento in background (scelta del cliente o imposta dal pannello, acceso di serie): l'APK si scarica
+///   e si verifica in silenzio (solo su Wi-Fi o cavo, mai durante la visione); quando è pronto si propone
+///   «Installa ora» e al cliente resta solo la conferma di Android.
+/// - Dal pannello: «Invia aggiornamento» (upd nel battito) o il comando «update» fanno partire subito il controllo.
+class AppUpdater extends ChangeNotifier {
+  AppUpdater({
+    required this.feedUrl,
+    required this.currentCode,
+    required this.currentVersion,
+    required this.backgroundEnabled,
+    required this.watching,
+  }) {
+    _sub = NativeBridge.updateEvents.listen(_onEvent);
+  }
+
+  final String feedUrl;
+  final int currentCode;
+  final String currentVersion;
+
+  /// Aggiornamento in background acceso (preferenza del cliente o imposta dal pannello).
+  final bool Function() backgroundEnabled;
+
+  /// Visione in corso: niente download non richiesti e niente finestre.
+  final bool Function() watching;
+
+  StreamSubscription<Map<String, dynamic>>? _sub;
+  Timer? _timer;
+  DateTime? _lastCheck;
+  bool _checking = false;
+  int _failed = 0;
+  int _offeredCode = 0;
+
+  /// Versione nuova trovata e non ancora installata.
+  UpdateInfo? pending;
+
+  /// L'APK di [pending] è già scaricato e verificato.
+  bool ready = false;
+
+  /// Avanzamento del download richiesto dal cliente (0-100), -1 se fermo.
+  int progress = -1;
+
+  /// Ultimo esito da mostrare (es. errore del download).
+  String? message;
+
+  /// La versione da proporre al cliente: l'interfaccia mostra la finestra e poi rimette null.
+  final ValueNotifier<UpdateInfo?> offer = ValueNotifier(null);
+
+  /// Controllo periodico: all'avvio e poi ogni ora.
+  void start() {
+    _timer?.cancel();
+    Timer(const Duration(seconds: 25), () => unawaited(check()));
+    _timer = Timer.periodic(const Duration(hours: 1), (_) => unawaited(check()));
+  }
+
+  /// L'app torna in primo piano: nuovo controllo se l'ultimo è vecchio di oltre 10 minuti; una versione già
+  /// trovata si ripropone.
+  void onForeground() {
+    _offeredCode = 0;
+    final last = _lastCheck;
+    if (last == null || DateTime.now().difference(last) > const Duration(minutes: 10)) {
+      unawaited(check());
+    } else {
+      _maybeOffer();
+    }
+  }
+
+  /// Il pannello ha chiesto l'aggiornamento: controllo subito e scaricamento anche su rete a consumo.
+  /// Restituisce l'esito da confermare al pannello.
+  Future<String> fromPanel() async {
+    final u = await check(force: true);
+    if (u == null) return 'già aggiornata ($currentVersion)';
+    if (watching()) return 'versione ${u.version}: proposta a fine visione';
+    return ready ? 'versione ${u.version} pronta: proposta al cliente' : 'versione ${u.version} in scaricamento';
+  }
+
+  /// Legge il feed; se c'è una versione nuova la scarica in background (quando è il caso) e la propone.
+  /// [manual]: il cliente ha premuto «Controlla»: si propone subito, anche senza download in background.
+  Future<UpdateInfo?> check({bool force = false, bool manual = false}) async {
+    if (_checking || currentCode <= 0) return pending;
+    _checking = true;
+    try {
+      Object? raw;
+      try {
+        raw = await net.fetchJson(Uri.parse(feedUrl), timeout: const Duration(seconds: 15));
+      } on Object {
+        if (manual) message = 'Impossibile controllare gli aggiornamenti adesso';
+        notifyListeners();
+        return pending;
+      }
+      _lastCheck = DateTime.now();
+      final m = asMap(raw);
+      final version = (asString(m['version']) ?? '').replaceFirst(RegExp(r'^v'), '');
+      final code = asInt(m['versionCode']) ?? _semverCode(version);
+      final url = asString(m['url']) ?? '';
+      if (code <= currentCode || !url.startsWith('https://')) {
+        pending = null;
+        ready = false;
+        if (manual) message = 'Hai già l\'ultima versione ($currentVersion)';
+        notifyListeners();
+        return null;
+      }
+      final u = UpdateInfo(code: code, version: version, url: url);
+      if (pending?.code != code) {
+        ready = false;
+        _failed = 0;
+        _offeredCode = 0;
+      }
+      pending = u;
+      message = null;
+      final st = await NativeBridge.updateStatus(code);
+      ready = st['ready'] == true;
+      final metered = st['metered'] == true;
+      if (!ready && !manual && (backgroundEnabled() || force) && (force || !metered) && !watching() && _failed < 3) {
+        await NativeBridge.updatePrefetch(url, code); // l'esito arriva con l'evento ready | failed
+      } else {
+        _maybeOffer(manual: manual);
+      }
+      notifyListeners();
+      return u;
+    } finally {
+      _checking = false;
+    }
+  }
+
+  /// Installa la versione trovata: subito se è già scaricata, altrimenti download con avanzamento.
+  Future<void> install() async {
+    final u = pending;
+    if (u == null) return;
+    message = null;
+    progress = ready ? 100 : 0;
+    notifyListeners();
+    await NativeBridge.updateInstall(u.url, u.code);
+  }
+
+  void _maybeOffer({bool manual = false}) {
+    final u = pending;
+    if (u == null || watching()) return;
+    if (!manual && _offeredCode == u.code) return;
+    _offeredCode = u.code;
+    offer.value = u;
+  }
+
+  void _onEvent(Map<String, dynamic> e) {
+    final type = asString(e['type']) ?? '';
+    switch (type) {
+      case 'ready':
+        if (asInt(e['code']) == pending?.code) {
+          ready = true;
+          _offeredCode = 0;
+          _maybeOffer();
+        }
+      case 'failed':
+        _failed++; // si riprova al prossimo controllo (al massimo tre volte per versione)
+        _maybeOffer(); // intanto il cliente può scaricarla a mano
+      case 'progress':
+        progress = asInt(e['p']) ?? progress;
+      case 'installer':
+        progress = -1;
+        message = 'Conferma l\'installazione nella schermata di Android';
+      case 'perm':
+        progress = -1;
+        message = 'Consenti a Kairos Plus di installare app nelle impostazioni che si sono aperte, poi riprova';
+      case 'error':
+        progress = -1;
+        message = 'Aggiornamento non riuscito: ${asString(e['msg']) ?? 'errore'}';
+      case 'busy':
+        message = 'Download già in corso';
+    }
+    notifyListeners();
+  }
+
+  static int _semverCode(String v) {
+    final m = RegExp(r'^(\d{1,3})\.(\d{1,2})\.(\d{1,3})$').firstMatch(v);
+    if (m == null) return 0;
+    return int.parse(m[1]!) * 10000 + int.parse(m[2]!) * 100 + int.parse(m[3]!);
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _sub?.cancel();
+    offer.dispose();
+    super.dispose();
+  }
+}

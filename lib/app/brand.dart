@@ -6,6 +6,10 @@ abstract final class Brand {
   static const String appName = 'Kairos Plus';
   static const String shortName = 'Kairos';
 
+  /// Feed della release più recente (versione, numero e link dell'APK): lo legge l'app per aggiornarsi
+  /// e lo legge il pannello Kairos per sapere qual è l'ultima versione.
+  static const String updateFeed = 'https://github.com/mariopiccolo8562-lang/kairos-flutter/releases/latest/download/kairos-plus.json';
+
   /// Viola Kairos Plus (le altre app Kairos usano rosso, blu, arancio e ambra).
   static const Color accent = Color(0xFFA855F7);
   static const Color accentDeep = Color(0xFF7C3AED);

@@ -78,6 +78,8 @@ class _MainShellState extends State<MainShell> {
     FocusManager.instance.addListener(_onFocusChanged);
     _app.notice.addListener(_onNotice);
     _app.panelState.addListener(_onPanelState);
+    _app.remoteCmd.addListener(_onRemoteCmd);
+    _app.updater.offer.addListener(_onUpdateOffer);
     _focusContent();
     // avvisi del fornitore non ancora letti
     Timer(const Duration(milliseconds: 900), () {
@@ -90,6 +92,8 @@ class _MainShellState extends State<MainShell> {
     FocusManager.instance.removeListener(_onFocusChanged);
     _app.notice.removeListener(_onNotice);
     _app.panelState.removeListener(_onPanelState);
+    _app.remoteCmd.removeListener(_onRemoteCmd);
+    _app.updater.offer.removeListener(_onUpdateOffer);
     _railArea.dispose();
     _contentArea.dispose();
     for (final node in _tabNodes.values) {
@@ -115,6 +119,22 @@ class _MainShellState extends State<MainShell> {
   }
 
   void _onPanelState() => _showUnseenMessages();
+
+  /// Il pannello ha chiesto di aprire le Impostazioni (controllo remoto).
+  void _onRemoteCmd() {
+    if (_app.remoteCmd.value != 'settings' || !mounted) return;
+    _app.remoteCmd.value = null;
+    Navigator.of(context).popUntil((r) => r.isFirst);
+    _select(ShellTab.settings);
+  }
+
+  /// Versione nuova dell'app trovata (o già scaricata in background): si propone appena si è in un menu.
+  void _onUpdateOffer() {
+    final u = _app.updater.offer.value;
+    if (u == null || !mounted) return;
+    _app.updater.offer.value = null;
+    unawaited(showUpdateDialog(context, _app.updater));
+  }
 
   Future<void> _showUnseenMessages() async {
     if (_messagesOpen || !mounted) return;

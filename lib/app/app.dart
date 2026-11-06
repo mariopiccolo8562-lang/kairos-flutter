@@ -15,16 +15,39 @@ class KairosPlusApp extends StatefulWidget {
 }
 
 class _KairosPlusAppState extends State<KairosPlusApp> {
-  final AppController _controller = AppController();
+  AppController _controller = AppController();
+  int _generation = 0;
 
   @override
   void initState() {
     super.initState();
     _controller.start();
+    _controller.remoteCmd.addListener(_onRemoteCmd);
+  }
+
+  /// Comandi del pannello che riguardano tutta l'app: riavvio (ricrea tutto, come riaprirla) e chiusura.
+  void _onRemoteCmd() {
+    final cmd = _controller.remoteCmd.value;
+    if (cmd == 'reload') {
+      _controller.remoteCmd.value = null;
+      final old = _controller;
+      old.remoteCmd.removeListener(_onRemoteCmd);
+      setState(() {
+        _controller = AppController();
+        _generation++;
+      });
+      _controller.start();
+      _controller.remoteCmd.addListener(_onRemoteCmd);
+      old.dispose();
+    } else if (cmd == 'exit') {
+      _controller.remoteCmd.value = null;
+      SystemNavigator.pop();
+    }
   }
 
   @override
   void dispose() {
+    _controller.remoteCmd.removeListener(_onRemoteCmd);
     _controller.dispose();
     super.dispose();
   }
@@ -32,6 +55,7 @@ class _KairosPlusAppState extends State<KairosPlusApp> {
   @override
   Widget build(BuildContext context) {
     return AppScope(
+      key: ValueKey<int>(_generation),
       controller: _controller,
       child: MaterialApp(
         title: Brand.appName,

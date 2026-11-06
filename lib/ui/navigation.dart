@@ -5,6 +5,7 @@ import '../app/app_scope.dart';
 import '../app/brand.dart';
 import '../app/theme.dart';
 import '../data/models.dart';
+import '../state/app_updater.dart';
 import 'screens/details_screen.dart';
 import 'widgets/tv_button.dart';
 import 'widgets/tv_focusable.dart';
@@ -275,5 +276,61 @@ Future<String?> showPinInput(BuildContext context, {required String title, requi
         ),
       );
     },
+  );
+}
+
+/// Propone la versione nuova dell'app: «Installa ora» se l'APK è già scaricato in background,
+/// altrimenti «Aggiorna ora» con l'avanzamento del download. Android chiede poi la sua conferma.
+Future<void> showUpdateDialog(BuildContext context, AppUpdater updater) async {
+  final u = updater.pending;
+  if (u == null) return;
+  _pausePreview(context);
+  final ready = updater.ready;
+  final go = await showTvConfirm(
+    context,
+    title: ready ? 'Aggiornamento ${u.version} pronto' : 'Nuova versione ${u.version}',
+    message: ready
+        ? 'La versione nuova di Kairos Plus è già scaricata e verificata: premi Installa e conferma nella schermata di Android. Ci vuole meno di un minuto.'
+        : 'Contiene miglioramenti e correzioni. Il download richiede pochi secondi, poi conferma l\'installazione nella schermata di Android.',
+    confirmLabel: ready ? 'Installa ora' : 'Aggiorna ora',
+  );
+  if (!go || !context.mounted) return;
+  await updater.install();
+  if (ready || !context.mounted) return;
+  // download richiesto dal cliente: avanzamento fino all'apertura dell'installer (o all'errore)
+  await showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (context) => ListenableBuilder(
+      listenable: updater,
+      builder: (context, child) {
+        final p = updater.progress;
+        final done = p < 0;
+        return PopScope(
+          canPop: done,
+          child: _dialogFrame(
+            width: 420,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Aggiornamento', style: AppText.title),
+                const SizedBox(height: 14),
+                LinearProgressIndicator(value: done ? null : p / 100, color: Brand.accent, backgroundColor: Brand.card),
+                const SizedBox(height: 10),
+                Text(done ? (updater.message ?? '') : 'Download $p%', style: AppText.body),
+                if (done) ...[
+                  const SizedBox(height: 20),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [TvButton(label: 'Ok', autofocus: true, onPressed: () => Navigator.of(context).pop())],
+                  ),
+                ],
+              ],
+            ),
+          ),
+        );
+      },
+    ),
   );
 }

@@ -16,6 +16,7 @@ class DeviceInfo {
     this.lowRam = false,
     this.totalMemMb = 0,
     this.version = '',
+    this.versionCode = 0,
   });
 
   final String model; // es. "Amazon AFTMM"
@@ -25,6 +26,7 @@ class DeviceInfo {
   final bool lowRam;
   final int totalMemMb;
   final String version; // versione dell'app, es. "0.1.7"
+  final int versionCode; // numero di versione (cresce a ogni compilazione)
 
   /// Grafica leggera in automatico: chiavette con poca memoria e tutte le Fire TV
   /// (modelli «AFT…»), dove conta la velocità più degli effetti.
@@ -40,6 +42,7 @@ class DeviceInfo {
       lowRam: m['lowRam'] == true,
       totalMemMb: asInt(m['totalMemMb']) ?? 0,
       version: asString(m['version']) ?? '',
+      versionCode: asInt(m['versionCode']) ?? 0,
     );
   }
 }
@@ -71,6 +74,7 @@ abstract final class NativeBridge {
   static const MethodChannel _channel = MethodChannel('kairos/native');
   static final StreamController<PlayerEvent> _events = StreamController<PlayerEvent>.broadcast();
   static final StreamController<PreviewEvent> _previewEvents = StreamController<PreviewEvent>.broadcast();
+  static final StreamController<Map<String, dynamic>> _updateEvents = StreamController<Map<String, dynamic>>.broadcast();
   static bool _listening = false;
 
   /// Eventi dell'anteprima (il video è partito, errore, fermata).
@@ -80,6 +84,12 @@ abstract final class NativeBridge {
   }
 
   /// Eventi del lettore mentre è aperto.
+  /// Eventi dell'aggiornamento dell'app (ready, failed, progress, perm, installer, error, busy).
+  static Stream<Map<String, dynamic>> get updateEvents {
+    _listen();
+    return _updateEvents.stream;
+  }
+
   static Stream<PlayerEvent> get playerEvents {
     _listen();
     return _events.stream;
@@ -97,12 +107,44 @@ abstract final class NativeBridge {
           _events.add(PlayerEvent(asString(m['type']) ?? '', m));
         } else if (call.method == 'previewEvent') {
           _previewEvents.add(PreviewEvent(asString(m['key']) ?? '', asString(m['state']) ?? ''));
+        } else if (call.method == 'updateEvent') {
+          _updateEvents.add(m);
         }
       } on FormatException {
         // evento rovinato: si ignora
       }
       return null;
     });
+  }
+
+  /// Stato dell'aggiornamento [code]: ready (APK già scaricato e verificato), metered, busy, canInstall.
+  static Future<Map<String, dynamic>> updateStatus(int code) async {
+    _listen();
+    try {
+      return asMap(await _channel.invokeMethod<Object?>('updateStatus', {'code': code}));
+    } on Object {
+      return const <String, dynamic>{};
+    }
+  }
+
+  /// Scarica e verifica l'APK in background (evento ready | failed).
+  static Future<void> updatePrefetch(String url, int code) async {
+    _listen();
+    try {
+      await _channel.invokeMethod<Object?>('updatePrefetch', {'url': url, 'code': code});
+    } on Object catch (e) {
+      debugPrint('Scaricamento aggiornamento non partito: $e');
+    }
+  }
+
+  /// Installa: subito se l'APK è pronto, altrimenti lo scarica (eventi progress) e apre l'installer.
+  static Future<void> updateInstall(String url, int code) async {
+    _listen();
+    try {
+      await _channel.invokeMethod<Object?>('updateInstall', {'url': url, 'code': code});
+    } on Object catch (e) {
+      debugPrint('Installazione non partita: $e');
+    }
   }
 
   static Future<DeviceInfo> device() async {

@@ -162,8 +162,9 @@ class _SettingsPageState extends State<SettingsPage> {
             const _SectionTitle('Riproduzione e grafica'),
             _SettingTile(
               title: 'Anteprima dei canali',
-              value: app.previewEnabled ? '1° OK riquadro · 2° OK schermo intero' : 'Spenta: OK apre lo schermo intero',
+              value: (app.previewEnabled ? '1° OK riquadro · 2° OK schermo intero' : 'Spenta: OK apre lo schermo intero') + (app.imposed('preview') ? ' · scelta dal fornitore' : ''),
               onSelect: () async {
+                if (app.imposed('preview')) return;
                 await app.setPreviewMode(app.previewEnabled ? 'off' : 'click');
                 if (mounted) setState(() {});
               },
@@ -171,11 +172,13 @@ class _SettingsPageState extends State<SettingsPage> {
             _SettingTile(
               title: 'Grafica leggera',
               value: switch (app.liteMode) {
-                'on' => 'Sempre (più veloce)',
-                'off' => 'Mai (grafica completa)',
-                _ => app.lite ? 'Automatica: attiva su questo dispositivo' : 'Automatica: non serve qui',
-              },
+                    'on' || 'max' => 'Sempre (più veloce)',
+                    'off' => 'Mai (grafica completa)',
+                    _ => app.lite ? 'Automatica: attiva su questo dispositivo' : 'Automatica: non serve qui',
+                  } +
+                  (app.imposed('lite') ? ' · scelta dal fornitore' : ''),
               onSelect: () async {
+                if (app.imposed('lite')) return;
                 await app.setLiteMode(switch (app.liteMode) {
                   'auto' => 'on',
                   'on' => 'off',
@@ -209,6 +212,38 @@ class _SettingsPageState extends State<SettingsPage> {
               title: 'Svuota la cache delle immagini',
               value: _cacheMessage ?? 'Libera spazio sul dispositivo',
               onSelect: _clearImages,
+            ),
+            const SizedBox(height: 12),
+            const _SectionTitle('Aggiornamenti'),
+            ListenableBuilder(
+              listenable: app.updater,
+              builder: (context, child) {
+                final u = app.updater.pending;
+                final ready = app.updater.ready;
+                return _SettingTile(
+                  title: 'Aggiornamenti dell\'app',
+                  value: u == null
+                      ? (app.updater.message ?? 'Versione installata ${app.appVersion} · premi per controllare')
+                      : (ready ? 'Versione ${u.version} scaricata: premi per installare' : 'Versione ${u.version} disponibile: premi per aggiornare'),
+                  onSelect: () async {
+                    if (u != null) {
+                      await showUpdateDialog(context, app.updater);
+                      return;
+                    }
+                    await app.updater.check(manual: true); // se c'è una versione nuova la finestra arriva da sola
+                  },
+                );
+              },
+            ),
+            _SettingTile(
+              title: 'Aggiornamenti in background',
+              value: (app.bgUpdate ? 'Sì: la versione nuova si scarica da sola su Wi-Fi o cavo, a te resta solo «Installa»' : 'No: si scarica solo quando accetti') +
+                  (app.imposed('bgupd') ? ' · scelta dal fornitore' : ''),
+              onSelect: () async {
+                if (app.imposed('bgupd')) return;
+                await app.setBgUpdate(!app.bgUpdate);
+                if (mounted) setState(() {});
+              },
             ),
             const SizedBox(height: 12),
             const _SectionTitle('Informazioni'),

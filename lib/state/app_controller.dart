@@ -4,15 +4,19 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
+import '../app/brand.dart';
 import '../app/perf.dart';
 import '../core/json.dart';
 import '../core/native.dart';
 import '../core/net.dart' as net;
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+
 import '../data/catalog_repository.dart';
 import '../data/models.dart';
 import '../data/sources/content_source.dart';
 import '../data/user_store.dart';
 import '../panel/panel.dart';
+import 'app_updater.dart';
 
 enum SessionStatus { starting, activation, loading, ready, error }
 
@@ -105,7 +109,22 @@ class AppController {
   String _catalogSig = '';
   bool _privacyOk = false;
   int _kickSeen = 0;
+  int _updSeen = 0;
+  bool _bgUpdate = true;
+  bool _updaterStarted = false;
   String _liteMode = 'auto';
+  // controllo remoto: impostazioni imposte dal pannello (vincono su quelle scelte qui) e versione applicata
+  Map<String, dynamic> _rc = const <String, dynamic>{};
+  String _rcv = '';
+  /// Il pannello ha imposto questa impostazione: nell'app si vede ma non si cambia.
+  bool imposed(String key) => (_rc[key]?.toString() ?? '').isNotEmpty;
+  /// Comando dal pannello che l'interfaccia deve eseguire (es. aprire le Impostazioni).
+  final ValueNotifier<String?> remoteCmd = ValueNotifier(null);
+  /// Aggiornamento dell'app (feed delle release, scaricamento in background, installazione).
+  AppUpdater? _updater;
+  AppUpdater get updater => _updater!;
+  /// Aggiornamento in background acceso (imposto dal pannello o scelto qui).
+  bool get bgUpdate => imposed('bgupd') ? _rc['bgupd'].toString() == 'on' : _bgUpdate;
   String _previewMode = 'click';
   int _previewSeq = 0;
   bool _inPlayer = false;
@@ -125,10 +144,10 @@ class AppController {
   bool get lite => Perf.lite;
 
   /// auto | on | off
-  String get liteMode => _liteMode;
+  String get liteMode => switch (_rc['lite']?.toString() ?? '') { 'auto' || 'on' || 'max' || 'off' => _rc['lite'].toString(), _ => _liteMode };
 
   /// Anteprima dei canali attiva: 1° OK nel riquadro, 2° OK schermo intero.
-  bool get previewEnabled => _previewMode != 'off';
+  bool get previewEnabled => (imposed('preview') ? _rc['preview'].toString() : _previewMode) != 'off';
   String get deviceCode => _panel?.identity.code ?? '';
   String get appVersion => device.version.isEmpty ? '0.1' : device.version;
   Account? get account => _account;
@@ -148,11 +167,29 @@ class AppController {
     final earlyCache = wasActive ? CatalogRepository.readCache() : null;
 
     device = await NativeBridge.device();
+    _bgUpdate = await _store.loadBgUpdate();
+    _updSeen = await _store.loadUpdSeen();
+    _updater = AppUpdater(
+      feedUrl: Brand.updateFeed,
+      currentCode: device.versionCode,
+      currentVersion: device.version,
+      backgroundEnabled: () => bgUpdate,
+      watching: () => _watching != null || _inPlayer,
+    );
     final model = device.rawModel.replaceAll(RegExp(r'[^\x20-\x7E]'), '').trim();
     net.userAgent =
         'Mozilla/5.0 (Linux; Android ${device.release.isEmpty ? '9' : device.release}; ${model.isEmpty ? 'Android' : model}) KairosPlus/$appVersion';
 
     _liteMode = await _store.loadLiteMode();
+    {
+      final (rc, rcv) = await _store.loadRemote();
+      try {
+        _rc = rc.isEmpty ? const <String, dynamic>{} : asMap(jsonDecode(rc));
+      } on FormatException {
+        _rc = const <String, dynamic>{};
+      }
+      _rcv = rcv;
+    }
     _previewMode = await _store.loadPreviewMode();
     _applyLite();
 
@@ -201,6 +238,7 @@ class AppController {
       unawaited(_activationTick());
     } else if (status.value == SessionStatus.ready) {
       unawaited(_beat(true));
+      if (_updaterStarted) updater.onForeground();
     }
   }
 
@@ -277,6 +315,11 @@ class AppController {
   }
 
   Future<void> _onRegistered(PanelState s) async {
+    if (s.raw.containsKey('rc')) await _applyRemote(s.raw['rc'], asString(s.raw['rcv']) ?? '');
+    if (!_updaterStarted && s.active) {
+      _updaterStarted = true;
+      updater.start();
+    }
     final panel = _panel;
     // il pannello può indicare un nuovo indirizzo per sé stesso
     var moved = s.setting('serverUrl').trim();
@@ -573,6 +616,8 @@ class AppController {
         group: w?.group ?? '',
         screen: w == null ? 'home' : 'player',
         kickAck: _kickAck,
+        cfg: remoteSnapshot(),
+        rcv: _rcv,
       );
       if (j != null) await _handleBeat(j);
     } finally {
@@ -581,6 +626,16 @@ class AppController {
   }
 
   Future<void> _handleBeat(Map<String, dynamic> j) async {
+    if (j.containsKey('rc')) await _applyRemote(j['rc'], asString(j['rcv']) ?? '');
+    // «Invia aggiornamento» dal pannello (o aggiornamento automatico scelto dal fornitore)
+    final upd = asInt(j['upd']) ?? 0;
+    if (upd > 0 && upd != _updSeen) {
+      _updSeen = upd;
+      await _store.saveUpdSeen(upd);
+      unawaited(updater.fromPanel());
+    }
+    final cmds = j['cmds'];
+    if (cmds is List && cmds.isNotEmpty) unawaited(_runRemote(cmds));
     final kick = asInt(j['kick']) ?? 0;
     if (kick > 0) {
       _kickAck = kick;
@@ -789,7 +844,8 @@ class AppController {
   // Grafica leggera
 
   void _applyLite() {
-    Perf.lite = _liteMode == 'on' || (_liteMode == 'auto' && device.isLite);
+    final mode = liteMode;
+    Perf.lite = mode == 'on' || mode == 'max' || (mode == 'auto' && device.isLite);
     // chiavette con poca memoria: meno immagini tenute in memoria
     final imageCache = PaintingBinding.instance.imageCache;
     imageCache.maximumSize = Perf.lite ? 160 : 250;
@@ -802,6 +858,89 @@ class AppController {
     await _store.saveLiteMode(mode);
     _applyLite();
     if (Perf.lite != before) uiRevision.value++;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Controllo remoto dal pannello: impostazioni imposte (rc) e comandi (cmds)
+
+  /// Impostazioni attuali dell'app, con le stesse chiavi del pannello.
+  Map<String, Object?> remoteSnapshot() => {
+        'lite': liteMode,
+        'liteOn': Perf.lite ? 'on' : 'off',
+        'preview': previewEnabled ? 'click' : 'off',
+        'bgupd': bgUpdate ? 'on' : 'off',
+      };
+
+  /// Aggiornamento in background: scelta del cliente (se il pannello non l'ha imposta).
+  Future<void> setBgUpdate(bool on) async {
+    _bgUpdate = on;
+    await _store.saveBgUpdate(on);
+    uiRevision.value++;
+  }
+
+  Future<void> _applyRemote(Object? rc, String rcv) async {
+    Map<String, dynamic> next;
+    try {
+      next = rc is String ? (rc.isEmpty ? const <String, dynamic>{} : asMap(jsonDecode(rc))) : asMap(rc);
+    } on FormatException {
+      next = const <String, dynamic>{};
+    }
+    final raw = jsonEncode(next);
+    if (raw == jsonEncode(_rc) && rcv == _rcv) return;
+    final before = Perf.lite;
+    final previewBefore = previewEnabled;
+    _rc = next;
+    _rcv = rcv;
+    await _store.saveRemote(raw, rcv);
+    _applyLite();
+    if (!previewEnabled && previewBefore) stopPreview(release: true);
+    uiRevision.value++;
+    if (Perf.lite != before) uiRevision.value++;
+  }
+
+  Future<void> _runRemote(List<dynamic> cmds) async {
+    final panel = _panel;
+    if (panel == null) return;
+    for (final raw in cmds) {
+      final c = asMap(raw);
+      final id = asInt(c['id']) ?? 0;
+      final cmd = asString(c['c']) ?? '';
+      if (id <= 0) continue;
+      final watching = _watching != null;
+      switch (cmd) {
+        case 'reload':
+          await panel.cmdAck(id, true, 'riavvio');
+          remoteCmd.value = 'reload';
+        case 'cache':
+          await CatalogRepository.clearCache();
+          try {
+            await DefaultCacheManager().emptyCache();
+          } on Object {
+            // cache già vuota
+          }
+          PaintingBinding.instance.imageCache.clear();
+          await panel.cmdAck(id, true, 'cache svuotata');
+          remoteCmd.value = 'reload';
+        case 'sync':
+          if (watching) {
+            await panel.cmdAck(id, false, 'visione in corso: rimandato');
+          } else {
+            unawaited(_fetchAndApply());
+            await panel.cmdAck(id, true, 'catalogo in aggiornamento');
+          }
+        case 'settings':
+          if (watching) await NativeBridge.closePlayer();
+          remoteCmd.value = 'settings';
+          await panel.cmdAck(id, true, 'impostazioni aperte');
+        case 'update':
+          await panel.cmdAck(id, true, await updater.fromPanel());
+        case 'exit':
+          await panel.cmdAck(id, true, 'chiusa');
+          remoteCmd.value = 'exit';
+        default:
+          await panel.cmdAck(id, false, 'comando non supportato');
+      }
+    }
   }
 
   Future<void> setLiveFormat(String format) async {
@@ -997,6 +1136,8 @@ class AppController {
     favoritesRevision.dispose();
     progressRevision.dispose();
     notice.dispose();
+    remoteCmd.dispose();
+    _updater?.dispose();
     preview.dispose();
     uiRevision.dispose();
   }

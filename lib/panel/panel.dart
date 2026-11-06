@@ -345,6 +345,8 @@ class PanelClient {
     String group = '',
     String screen = '',
     int kickAck = 0,
+    Map<String, Object?> cfg = const {},
+    String rcv = '',
   }) async {
     try {
       final r = await _post('/api/player/heartbeat', {
@@ -362,11 +364,22 @@ class PanelClient {
         'screen': screen.length > 20 ? screen.substring(0, 20) : screen,
         'net': {'type': ''},
         'vpn': 'off',
+        'cfg': cfg, // controllo remoto: impostazioni attuali dell'app
+        'rcv': rcv, // configurazione del pannello applicata
         if (kickAck > 0) 'kickAck': kickAck,
       });
       return r.status == 200 ? r.body : null;
     } on PanelException {
       return null;
+    }
+  }
+
+  /// Conferma al pannello di un comando del controllo remoto.
+  Future<void> cmdAck(int id, bool ok, String info) async {
+    try {
+      await _post('/api/player/cmd', {..._auth(), 'id': id, 'ok': ok, 'info': info.length > 200 ? info.substring(0, 200) : info});
+    } on PanelException {
+      // il pannello lo rimanderà se serve
     }
   }
 

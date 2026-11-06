@@ -72,6 +72,20 @@ class MainActivity : FlutterActivity() {
                     PlayerActivity.closeCurrent()
                     result.success(true)
                 }
+                // aggiornamento dell'app: stato, scaricamento in background, installazione (vedi Updater.kt)
+                "updateStatus" -> result.success(Updater.status(this, (call.argument<Number>("code") ?: 0).toInt()))
+                "updatePrefetch" -> {
+                    val url = call.argument<String>("url") ?: ""
+                    val code = (call.argument<Number>("code") ?: 0).toInt()
+                    if (url.startsWith("https://") && code > 0) Updater.prefetch(this, url, code)
+                    result.success(true)
+                }
+                "updateInstall" -> {
+                    val url = call.argument<String>("url") ?: ""
+                    val code = (call.argument<Number>("code") ?: 0).toInt()
+                    if (url.startsWith("https://") && code > 0) Updater.install(this, url, code)
+                    result.success(true)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -105,6 +119,11 @@ class MainActivity : FlutterActivity() {
             @Suppress("DEPRECATION")
             packageManager.getPackageInfo(packageName, 0).versionName ?: ""
         } catch (_: Exception) { "" }
+        val versionCode = try {
+            val pi = packageManager.getPackageInfo(packageName, 0)
+            @Suppress("DEPRECATION")
+            (if (Build.VERSION.SDK_INT >= 28) pi.longVersionCode else pi.versionCode.toLong()).toInt()
+        } catch (_: Exception) { 0 }
         return mapOf(
             "model" to (Build.MANUFACTURER + " " + Build.MODEL).trim().take(80),
             "rawModel" to (Build.MODEL ?: ""),
@@ -113,6 +132,7 @@ class MainActivity : FlutterActivity() {
             "lowRam" to am.isLowRamDevice,
             "totalMemMb" to (mi.totalMem / (1024L * 1024L)).toInt(),
             "version" to version,
+            "versionCode" to versionCode,
         )
     }
 

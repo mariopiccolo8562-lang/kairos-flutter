@@ -23,7 +23,11 @@ class UserStore {
   static const String _kProgress = 'progress';
   static const String _kLiveFormat = 'live_format';
   static const String _kLiteMode = 'lite_mode';
+  static const String _kRc = 'rc_json';
+  static const String _kRcv = 'rc_ver';
   static const String _kPreviewMode = 'preview_mode';
+  static const String _kBgUpdate = 'bg_update';
+  static const String _kUpdSeen = 'upd_seen';
 
   // ---------------------------------------------------------------------------
   // Pannello
@@ -119,7 +123,25 @@ class UserStore {
   /// Grafica leggera: auto | on | off
   Future<String> loadLiteMode() async => await _prefs.getString(_kLiteMode) ?? 'auto';
 
+  /// Controllo remoto: impostazioni imposte dal pannello e versione applicata.
+  Future<(String, String)> loadRemote() async => (await _prefs.getString(_kRc) ?? '', await _prefs.getString(_kRcv) ?? '');
+
+  Future<void> saveRemote(String rc, String rcv) async {
+    await _prefs.setString(_kRc, rc);
+    await _prefs.setString(_kRcv, rcv);
+  }
+
   Future<void> saveLiteMode(String mode) => _prefs.setString(_kLiteMode, mode);
+
+  /// Aggiornamento in background: la versione nuova si scarica da sola (acceso di serie).
+  Future<bool> loadBgUpdate() async => await _prefs.getBool(_kBgUpdate) ?? true;
+
+  Future<void> saveBgUpdate(bool on) => _prefs.setBool(_kBgUpdate, on);
+
+  /// Ultima richiesta «Invia aggiornamento» del pannello già gestita.
+  Future<int> loadUpdSeen() async => await _prefs.getInt(_kUpdSeen) ?? 0;
+
+  Future<void> saveUpdSeen(int value) => _prefs.setInt(_kUpdSeen, value);
 
   /// Anteprima dei canali: click (1° OK riquadro, 2° OK schermo intero) | off
   Future<String> loadPreviewMode() async => await _prefs.getString(_kPreviewMode) ?? 'click';
