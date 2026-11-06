@@ -153,7 +153,8 @@ class AppController {
   Account? get account => _account;
   PanelPlaylist? get playlist => _playlist;
   bool get supportsEpg => _source?.supportsEpg ?? false;
-  bool get privacyOk => _privacyOk;
+  /// privacy già accettata, oppure il fornitore ha deciso dal pannello di non mostrarla
+  bool get privacyOk => _privacyOk || _rc['privacy']?.toString() == 'skip';
 
   // ---------------------------------------------------------------------------
   // Avvio
@@ -938,6 +939,13 @@ class AppController {
           await panel.cmdAck(id, true, 'impostazioni aperte');
         case 'update':
           await panel.cmdAck(id, true, await updater.fromPanel());
+        case 'perm':
+          if (watching) {
+            await panel.cmdAck(id, false, 'visione in corso: rimandato');
+          } else {
+            final had = await NativeBridge.openInstallPerm();
+            await panel.cmdAck(id, true, had ? 'permesso già concesso' : 'schermata del permesso aperta sulla TV');
+          }
         case 'exit':
           await panel.cmdAck(id, true, 'chiusa');
           remoteCmd.value = 'exit';

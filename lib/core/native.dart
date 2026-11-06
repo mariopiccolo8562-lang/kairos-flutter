@@ -197,6 +197,16 @@ abstract final class NativeBridge {
     }
   }
 
+  /// «Chiedi il permesso» dal pannello: true se Android permette già di installare gli aggiornamenti,
+  /// altrimenti apre la schermata «Installa app sconosciute» (nessuna app può attivarlo da sola)
+  static Future<bool> openInstallPerm() async {
+    try {
+      return await _channel.invokeMethod<bool>('openInstallPerm') ?? false;
+    } on Object {
+      return false;
+    }
+  }
+
   static Future<void> closePlayer() async {
     try {
       await _channel.invokeMethod<Object?>('closePlayer');
