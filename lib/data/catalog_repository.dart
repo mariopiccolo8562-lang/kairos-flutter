@@ -5,6 +5,7 @@ import 'dart:isolate';
 import 'package:path_provider/path_provider.dart';
 
 import '../core/net.dart' as net;
+import 'home_rules.dart';
 import 'models.dart';
 import 'sources/content_source.dart';
 
@@ -23,12 +24,18 @@ abstract final class CatalogRepository {
 
   static Future<String> _homePath() async => '${await _dir()}${Platform.pathSeparator}catalog_home_v1.json';
 
-  static Future<Catalog> fetch(Account account, {Iterable<String> favorites = const <String>[]}) async {
+  /// [homeTop] e [homeHide]: Home decisa dal pannello (rc «home.top» e «home.hide»), per la copia della Home.
+  static Future<Catalog> fetch(
+    Account account, {
+    Iterable<String> favorites = const <String>[],
+    String homeTop = '',
+    String homeHide = '',
+  }) async {
     final path = await _cachePath();
     final homePath = await _homePath();
     final agent = net.userAgent;
     final keys = favorites.toList();
-    return Isolate.run(() => _fetchAndStore(account, path, homePath, agent, keys));
+    return Isolate.run(() => _fetchAndStore(account, path, homePath, agent, keys, homeTop, homeHide));
   }
 
   static Future<Catalog?> readCache() async {
@@ -42,10 +49,10 @@ abstract final class CatalogRepository {
     return Isolate.run(() => _readCache(path));
   }
 
-  /// Aggiorna la copia per la Home (es. con i preferiti di adesso).
-  static Future<void> writeHome(Catalog catalog, Iterable<String> favorites) async {
+  /// Aggiorna la copia per la Home (es. con i preferiti di adesso e la Home decisa dal pannello).
+  static Future<void> writeHome(Catalog catalog, Iterable<String> favorites, {HomeRules? rules}) async {
     final path = await _homePath();
-    final json = catalog.homeSnapshot(favorites).toJson();
+    final json = catalog.homeSnapshot(favorites, rules: rules).toJson();
     await Isolate.run(() => _write(path, json));
   }
 
@@ -57,13 +64,21 @@ abstract final class CatalogRepository {
   }
 }
 
-Future<Catalog> _fetchAndStore(Account account, String path, String homePath, String agent, List<String> favorites) async {
+Future<Catalog> _fetchAndStore(
+  Account account,
+  String path,
+  String homePath,
+  String agent,
+  List<String> favorites,
+  String homeTop,
+  String homeHide,
+) async {
   // ogni isolate ha le sue variabili: il nome con cui l'app si presenta va ripassato
   net.userAgent = agent;
   try {
     final catalog = await ContentSource.of(account).fetchCatalog();
     _write(path, catalog.toJson());
-    _write(homePath, catalog.homeSnapshot(favorites).toJson());
+    _write(homePath, catalog.homeSnapshot(favorites, rules: HomeRules.parse(homeTop, homeHide)).toJson());
     return catalog;
   } finally {
     net.closeClient(); // le connessioni dell'isolate non servono più

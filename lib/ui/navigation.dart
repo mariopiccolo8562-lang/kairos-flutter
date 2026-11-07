@@ -445,7 +445,10 @@ Future<void> showUpdateDialog(BuildContext context, AppUpdater updater) async {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
-                      TvButton(label: 'Chiudi l\'app', onPressed: () => SystemNavigator.pop()),
+                      TvButton(
+                        label: 'Chiudi l\'app',
+                        onPressed: () => AppScope.of(context).beforeExit().whenComplete(SystemNavigator.pop),
+                      ),
                       const SizedBox(width: 12),
                       TvButton(label: 'Installa ora', autofocus: true, onPressed: () => unawaited(updater.install())),
                     ],

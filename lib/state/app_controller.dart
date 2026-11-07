@@ -11,6 +11,7 @@ import '../core/native.dart';
 import '../core/net.dart' as net;
 
 import '../data/catalog_repository.dart';
+import '../data/home_rules.dart';
 import '../data/models.dart';
 import '../data/sources/content_source.dart';
 import '../data/user_store.dart';
@@ -182,14 +183,36 @@ class AppController {
   final Map<String, Future<SeriesDetails?>> _seriesDetails = {};
 
   AppLifecycleListener? _lifecycle;
+  bool _disposed = false;
   StreamSubscription<PlayerEvent>? _playerSub;
   StreamSubscription<PreviewEvent>? _previewSub;
 
   /// Grafica leggera (scelta dall'utente o automatica sulle chiavette con poca memoria).
   bool get lite => Perf.lite;
 
-  /// auto | on | off
-  String get liteMode => switch (_rc['lite']?.toString() ?? '') { 'auto' || 'on' || 'max' || 'off' => _rc['lite'].toString(), _ => _liteMode };
+  /// auto | on | off. Senza il permesso «lite» del pannello la scelta del cliente non vale (resta salvata):
+  /// decide il pannello se l'ha imposta, altrimenti il rilevamento automatico.
+  String get liteMode => switch (_rc['lite']?.toString() ?? '') {
+        'auto' || 'on' || 'max' || 'off' => _rc['lite'].toString(),
+        _ => _permLite ? _liteMode : 'auto',
+      };
+
+  /// Il cliente può cambiare la modalità leggera (permesso «lite» del pannello: assente = sì).
+  bool _permLite = true;
+
+  /// Modalità leggera bloccata nelle Impostazioni: imposta dal pannello o permesso spento («scelta dal fornitore»).
+  bool get liteLocked => imposed('lite') || !_permLite;
+
+  /// Home decisa dal pannello: categorie in primo piano (rc «home.top») e nascoste (rc «home.hide»).
+  HomeRules get homeRules {
+    final top = asString(_rc['home.top']) ?? '';
+    final hide = asString(_rc['home.hide']) ?? '';
+    final current = _homeRules;
+    if (current.source == '$top\n$hide') return current;
+    return _homeRules = HomeRules.parse(top, hide);
+  }
+
+  HomeRules _homeRules = HomeRules.none;
 
   /// Anteprima dei canali attiva: 1° OK nel riquadro, 2° OK schermo intero.
   bool get previewEnabled => (imposed('preview') ? _rc['preview'].toString() : _previewMode) != 'off';
@@ -252,6 +275,7 @@ class AppController {
     _parental = await _store.loadParental();
     _pin = await _store.loadPin();
     _pinLater = await _store.loadPinLater();
+    _permLite = cachedState?.perm('lite') ?? true; // permesso dell'ultimo stato: niente cambio di grafica all'avvio
     _applyLite();
 
     _favorites = await _store.loadFavorites();
@@ -282,7 +306,8 @@ class AppController {
 
     _playerSub = NativeBridge.playerEvents.listen(_onPlayerEvent);
     _previewSub = NativeBridge.previewEvents.listen(_onPreviewEvent);
-    _lifecycle = AppLifecycleListener(onResume: _onResume, onPause: _onPause);
+    // presenza: «in sfondo» quando nessuna schermata dell'app è visibile (paused / hidden / detached)
+    _lifecycle = AppLifecycleListener(onResume: _onResume, onShow: _onShow, onHide: _onHide, onPause: _onHide, onDetach: _onHide);
 
     // partenza immediata con l'ultimo stato attivo; il pannello si ricontrolla subito dopo
     if (cachedState != null && cachedState.active) {
@@ -296,6 +321,7 @@ class AppController {
 
   void _onResume() {
     _foreground = true;
+    _visibilityChanged();
     if (status.value == SessionStatus.activation) {
       unawaited(_activationTick());
     } else if (status.value == SessionStatus.ready) {
@@ -304,9 +330,18 @@ class AppController {
     }
   }
 
-  void _onPause() {
+  /// L'interfaccia è di nuovo visibile (ritorno dalla Home del televisore o da un'altra app).
+  void _onShow() {
+    _foreground = true;
+    _visibilityChanged();
+  }
+
+  /// L'interfaccia non è più visibile: Home del televisore, altra app, oppure il lettore a schermo intero
+  /// (in quel caso l'app resta in primo piano: lo decide [_visible]).
+  void _onHide() {
     _foreground = false;
     _activationTimer?.cancel();
+    _visibilityChanged();
   }
 
   /// Ripete il caricamento dopo un errore.
@@ -534,6 +569,7 @@ class AppController {
 
   Future<void> _applyState(PanelState s, {Future<Catalog?>? cache, Future<Catalog?>? home}) async {
     _state = s;
+    _applyPerms(s);
     panelState.value = s;
     final pl = _choosePlaylist(s);
     final account = pl?.toAccount();
@@ -565,7 +601,7 @@ class AppController {
       if (cached != null && !cached.isEmpty) {
         catalog.value = cached;
         status.value = SessionStatus.ready;
-        unawaited(CatalogRepository.writeHome(cached, _favorites));
+        unawaited(CatalogRepository.writeHome(cached, _favorites, rules: homeRules));
         if (cached.isStale) unawaited(_refreshInBackground());
         return;
       }
@@ -606,7 +642,13 @@ class AppController {
   bool _refreshDeferred = false;
 
   Future<Catalog> _fetchShared(Account account) {
-    return _fetching ??= CatalogRepository.fetch(account, favorites: _favorites).whenComplete(() {
+    final rules = homeRules;
+    return _fetching ??= CatalogRepository.fetch(
+      account,
+      favorites: _favorites,
+      homeTop: rules.top.join(','),
+      homeHide: rules.hide.join(','),
+    ).whenComplete(() {
       _fetching = null;
     });
   }
@@ -682,34 +724,125 @@ class AppController {
   // ultime misure del lettore (banda, classi, stalli…): vanno al pannello nel battito
   Map<String, Object?> _stats = const <String, Object?>{};
 
+  // presenza: con l'app visibile (menu o lettore) ogni battito porta vis:true; quando va in sfondo il battito
+  // periodico si ferma e parte un solo battito vis:false (il pannello la mostra subito non in linea)
+  bool _pulseOn = false; // dispositivo attivo: il battito periodico serve (quando l'app è visibile)
+  bool _shown = true; // visibilità già comunicata al pannello
+  Future<void>? _beatCall; // battito normale in viaggio
+  Future<void>? _hiddenCall; // «vado in sfondo» in viaggio
+  int _hiddenSeq = 0;
+  Timer? _resumeTimer;
+
+  /// Una schermata dell'app è visibile: l'interfaccia oppure il lettore a schermo intero.
+  bool get _visible => _foreground || (_inPlayer && _playerVisible);
+
   void _startPulse() {
-    if (_pulseTimer != null) return;
+    if (_pulseOn) return;
+    _pulseOn = true;
     _lastRegister = _clock.elapsedMilliseconds;
-    _pulseTimer = Timer.periodic(const Duration(seconds: 20), (_) => unawaited(_beat(false)));
+    _runPulse();
     Timer(const Duration(seconds: 4), () => unawaited(_beat(false)));
   }
 
   void _stopPulse() {
-    _pulseTimer?.cancel();
-    _pulseTimer = null;
+    _pulseOn = false;
+    _resumeTimer?.cancel();
+    _resumeTimer = null;
+    _runPulse();
   }
 
-  Future<void> _beat(bool force) async {
+  /// Battito periodico: gira solo con il dispositivo attivo e l'app visibile.
+  void _runPulse() {
+    _pulseTimer?.cancel();
+    _pulseTimer = _pulseOn && _shown && !_disposed ? Timer.periodic(const Duration(seconds: 20), (_) => unawaited(_beat(false))) : null;
+  }
+
+  /// L'app è passata in sfondo o è tornata visibile (interfaccia o lettore): lo si dice subito al pannello.
+  /// Il passaggio dall'interfaccia al lettore (e ritorno) non cambia nulla: l'app resta visibile.
+  void _visibilityChanged() {
+    final visible = _visible;
+    if (_disposed || visible == _shown) return;
+    _shown = visible;
+    _runPulse();
+    if (visible) {
+      unawaited(_resumeBeat());
+    } else {
+      _resumeTimer?.cancel();
+      _resumeTimer = null;
+      final seq = ++_hiddenSeq;
+      _hiddenCall = _beatHidden(_hiddenCall).whenComplete(() {
+        if (seq == _hiddenSeq) _hiddenCall = null;
+      });
+    }
+  }
+
+  /// L'app si sta chiudendo (Esci, comando del pannello): il «vado in sfondo» parte subito e lo si aspetta al
+  /// massimo un attimo, perché con l'app chiusa la richiesta si interromperebbe.
+  Future<void> beforeExit() async {
+    _foreground = false;
+    _visibilityChanged();
+    final call = _hiddenCall;
+    if (call != null) await call.timeout(const Duration(milliseconds: 1500), onTimeout: () {});
+  }
+
+  /// Di nuovo visibile: battito subito (vis:true), anche se non è passato il minuto dei menu.
+  /// Se il pannello chiede di aspettare (15 s dall'ultimo battito vero, HTTP 429) si riprova dopo l'attesa;
+  /// se la rete non risponde o un altro battito è in viaggio, si riprova tra poco.
+  Future<void> _resumeBeat([int round = 0]) async {
+    _resumeTimer?.cancel();
+    _resumeTimer = null;
+    if (!_shown) return;
+    final wait = await _beat(true);
+    if (wait == 0 || !_shown || round >= 4) return;
+    _resumeTimer = Timer(Duration(milliseconds: wait > 0 ? wait + 500 : 3000), () => unawaited(_resumeBeat(round + 1)));
+  }
+
+  /// Un solo battito «vado in sfondo» (vis:false, idle) con gli stessi campi di sempre, dopo quelli ancora in
+  /// viaggio. Non aggiorna l'istante dell'ultimo battito: al ritorno in primo piano il battito parte subito.
+  Future<void> _beatHidden(Future<void>? before) async {
+    try {
+      if (before != null) await before;
+      final regular = _beatCall;
+      if (regular != null) await regular;
+      final s = _state;
+      final panel = _panel;
+      if (_visible || s == null || !s.active || panel == null) return;
+      await panel.heartbeat(
+        state: 'idle',
+        screen: 'home',
+        kickAck: _kickAck,
+        cfg: remoteSnapshot(),
+        rcv: _rcv,
+        vis: false,
+      );
+    } on Object {
+      // senza rete il pannello la vedrà comunque non in linea dopo qualche minuto
+    }
+  }
+
+  /// Manda il battito se serve (solo con l'app visibile). Restituisce 0 se è partito o non serve, altrimenti
+  /// i millisecondi dopo cui riprovare (limite dei 15 s, HTTP 429) oppure -1 (rete, altro battito in corso).
+  Future<int> _beat(bool force) async {
     final s = _state;
     final panel = _panel;
-    if (s == null || !s.active || panel == null || _beating) return;
+    if (s == null || !s.active || panel == null || !_visible) return 0;
+    if (_beating) return -1;
     final w = _watching;
-    if (!_foreground && (w == null || !_playerVisible)) return;
     final sig = '${w?.state ?? 'idle'}|${w?.channelId ?? ''}|${w?.title ?? ''}';
     final now = _clock.elapsedMilliseconds;
-    if (!force && sig == _lastSig && _lastBeat >= 0 && now - _lastBeat < (w == null ? 60000 : 20000)) return;
+    if (!force && sig == _lastSig && _lastBeat >= 0 && now - _lastBeat < (w == null ? 60000 : 20000)) return 0;
     // il pannello accetta al massimo un battito ogni 15 secondi
-    if (_lastBeat >= 0 && now - _lastBeat < 15000) return;
-    _lastSig = sig;
-    _lastBeat = now;
+    if (_lastBeat >= 0 && now - _lastBeat < 15000) return 15000 - (now - _lastBeat);
     _beating = true;
     try {
-      final j = await panel.heartbeat(
+      // il «vado in sfondo» ancora in viaggio deve arrivare prima di questo battito
+      final hidden = _hiddenCall;
+      if (hidden != null) {
+        await hidden;
+        if (!_visible) return 0;
+      }
+      final sentAt = _clock.elapsedMilliseconds;
+      final call = panel.heartbeat(
         state: w?.state ?? 'idle',
         title: w?.title ?? '',
         channel: w?.channel ?? '',
@@ -720,8 +853,20 @@ class AppController {
         cfg: remoteSnapshot(),
         rcv: _rcv,
         stats: _stats,
+        vis: true,
       );
-      if (j != null) await _handleBeat(j);
+      _beatCall = call;
+      final r = await call.whenComplete(() {
+        if (identical(_beatCall, call)) _beatCall = null;
+      });
+      if (r.status == 429) return r.wait > 0 ? r.wait * 1000 : -1;
+      final j = r.body;
+      if (!r.ok || j == null) return -1;
+      // solo un battito accettato conta per il limite di frequenza: uno fallito o rifiutato si riprova presto
+      _lastSig = sig;
+      _lastBeat = sentAt;
+      await _handleBeat(j);
+      return 0;
     } finally {
       _beating = false;
     }
@@ -815,6 +960,8 @@ class AppController {
         'ua': net.userAgent,
         'lite': lite,
         'playerClass': device.playerClass,
+        // permesso «resInd»: riquadro con qualità, risoluzione e FPS sui canali in diretta (assente = sì)
+        'resInd': _state?.perm('resInd') ?? true,
       });
     } on PlatformException catch (e) {
       return e.message ?? 'Lettore non disponibile';
@@ -822,6 +969,8 @@ class AppController {
       _watching = null;
       _playerVisible = false;
       _inPlayer = false;
+      // di solito l'interfaccia torna visibile subito; se invece l'app è finita in sfondo lo si dice al pannello
+      Timer(const Duration(seconds: 2), _visibilityChanged);
     }
     final finalStats = asMap(result?['stats']);
     if (finalStats.isNotEmpty) _stats = finalStats;
@@ -868,9 +1017,12 @@ class AppController {
           }
         }
       case 'background':
+        // lettore non più visibile (Home del televisore durante la visione): l'app va in sfondo
         _playerVisible = false;
+        _visibilityChanged();
       case 'foreground':
         _playerVisible = true;
+        _visibilityChanged();
     }
   }
 
@@ -970,7 +1122,18 @@ class AppController {
     imageCache.maximumSizeBytes = (Perf.lite ? 40 : 80) << 20;
   }
 
+  /// Permessi del pannello che cambiano la grafica (modalità leggera): si riapplicano a ogni stato nuovo.
+  void _applyPerms(PanelState s) {
+    final allowed = s.perm('lite');
+    if (allowed == _permLite) return;
+    _permLite = allowed;
+    final before = Perf.lite;
+    _applyLite();
+    if (Perf.lite != before) uiRevision.value++;
+  }
+
   Future<void> setLiteMode(String mode) async {
+    if (liteLocked) return; // scelta dal fornitore
     final before = Perf.lite;
     _liteMode = mode;
     await _store.saveLiteMode(mode);
@@ -1254,6 +1417,7 @@ class AppController {
   }
 
   void dispose() {
+    _disposed = true;
     _activationTimer?.cancel();
     _stopPulse();
     net.closeClient();

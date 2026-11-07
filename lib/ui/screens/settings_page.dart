@@ -176,9 +176,9 @@ class _SettingsPageState extends State<SettingsPage> {
                     'off' => 'Mai (grafica completa)',
                     _ => app.lite ? 'Automatica: attiva su questo dispositivo' : 'Automatica: non serve qui',
                   } +
-                  (app.imposed('lite') ? ' · scelta dal fornitore' : ''),
+                  (app.liteLocked ? ' · scelta dal fornitore' : ''),
               onSelect: () async {
-                if (app.imposed('lite')) return;
+                if (app.liteLocked) return; // imposta dal pannello o permesso «lite» spento
                 await app.setLiteMode(switch (app.liteMode) {
                   'auto' => 'on',
                   'on' => 'off',

@@ -27,13 +27,25 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
-    final catalog = AppScope.of(context).catalog.value;
+    final app = AppScope.of(context);
+    final catalog = app.catalog.value;
     if (catalog != null) {
-      final first = catalog.recentMovies.isNotEmpty
-          ? catalog.recentMovies.first
-          : (catalog.recentSeries.isNotEmpty ? catalog.recentSeries.first : null);
+      final first = _firstRecent(app, catalog);
       if (first != null) _hero.value = HeroData.fromItem(first);
     }
+  }
+
+  /// Titolo in evidenza all'apertura: il primo film (o serie) aggiunto di recente che non è
+  /// di una categoria nascosta dal pannello (rc «home.hide»).
+  static MediaItem? _firstRecent(AppController app, Catalog catalog) {
+    final rules = app.homeRules;
+    for (final kind in const [MediaKind.movie, MediaKind.series]) {
+      final hidden = rules.hiddenIds(catalog, kind);
+      for (final item in kind == MediaKind.movie ? catalog.recentMovies : catalog.recentSeries) {
+        if (!hidden.contains(item.categoryId)) return item;
+      }
+    }
+    return null;
   }
 
   @override
@@ -74,6 +86,11 @@ class _HomePageState extends State<HomePage> {
 
   Widget _rows(AppController app, Catalog catalog) {
     final rows = <RowSpec>[];
+    // Home decisa dal pannello: categorie in primo piano (home.top) e nascoste (home.hide); senza regole come sempre
+    final rules = app.homeRules;
+    final home = rules.layout(catalog);
+    final hiddenMovies = rules.hiddenIds(catalog, MediaKind.movie);
+    final hiddenSeries = rules.hiddenIds(catalog, MediaKind.series);
     // il primo elemento della prima fila è il punto d'ingresso dalla barra laterale
     FocusNode? entry = widget.entryNode;
     FocusNode? takeEntry() {
@@ -183,21 +200,39 @@ class _HomePageState extends State<HomePage> {
       ));
     }
 
+    // categorie in primo piano subito dopo «Continua a guardare», prima di tutte le altre righe
+    for (final (kind, category) in home.top) {
+      if (kind == MediaKind.live) {
+        addChannelRow('diretta:${category.id}', 'In diretta · ${category.name}', catalog.inCategory(MediaKind.live, category.id));
+      } else {
+        final prefix = kind == MediaKind.movie ? 'film' : 'serie';
+        addPosterRow('$prefix:${category.id}', category.name, catalog.inCategory(kind, category.id));
+      }
+    }
+
     addPosterRow('lista', 'La mia lista', [
       ...app.favoriteItems(MediaKind.movie),
       ...app.favoriteItems(MediaKind.series),
     ]);
     addChannelRow('canali', 'I tuoi canali', app.favoriteItems(MediaKind.live));
-    addPosterRow('film-nuovi', 'Film aggiunti di recente', catalog.recentMovies);
-    addPosterRow('serie-nuove', 'Serie aggiunte di recente', catalog.recentSeries);
-    if (catalog.liveCategories.isNotEmpty) {
-      final first = catalog.liveCategories.first;
-      addChannelRow('diretta:${first.id}', 'In diretta · ${first.name}', catalog.inCategory(MediaKind.live, first.id));
+    // novità senza i titoli delle categorie nascoste
+    addPosterRow('film-nuovi', 'Film aggiunti di recente', [
+      for (final item in catalog.recentMovies)
+        if (!hiddenMovies.contains(item.categoryId)) item,
+    ]);
+    addPosterRow('serie-nuove', 'Serie aggiunte di recente', [
+      for (final item in catalog.recentSeries)
+        if (!hiddenSeries.contains(item.categoryId)) item,
+    ]);
+    // le solite righe di categoria (stesso numero di sempre) senza le nascoste e senza quelle già in primo piano
+    final live = home.live;
+    if (live != null) {
+      addChannelRow('diretta:${live.id}', 'In diretta · ${live.name}', catalog.inCategory(MediaKind.live, live.id));
     }
-    for (final category in catalog.movieCategories.take(4)) {
+    for (final category in home.movies) {
       addPosterRow('film:${category.id}', category.name, catalog.inCategory(MediaKind.movie, category.id));
     }
-    for (final category in catalog.seriesCategories.take(2)) {
+    for (final category in home.series) {
       addPosterRow('serie:${category.id}', category.name, catalog.inCategory(MediaKind.series, category.id));
     }
 

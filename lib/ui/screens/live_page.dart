@@ -66,10 +66,11 @@ class _LivePageState extends State<LivePage> {
     super.dispose();
   }
 
-  List<Category> _categories(AppController app, Catalog catalog) => [
+  /// [live]: categorie della diretta già ordinate (in primo piano e nascoste decise dal pannello).
+  List<Category> _categories(AppController app, List<Category> live) => [
         if (app.favoriteItems(MediaKind.live).isNotEmpty) const Category(id: _favoritesId, name: 'Preferiti'),
         const Category(id: _allId, name: 'Tutti i canali'),
-        ...catalog.liveCategories,
+        ...live,
       ];
 
   List<MediaItem> _channels(AppController app, Catalog catalog, String id) {
@@ -210,9 +211,10 @@ class _LivePageState extends State<LivePage> {
           return ValueListenableBuilder<int>(
             valueListenable: app.favoritesRevision,
             builder: (context, revision, child) {
-              final categories = _categories(app, catalog);
-              var selectedId = _categoryId ??
-                  (catalog.liveCategories.isNotEmpty ? catalog.liveCategories.first.id : _allId);
+              // prima le categorie in primo piano decise dal pannello, in fondo quelle nascoste dalla Home
+              final live = app.homeRules.order(catalog.liveCategories);
+              final categories = _categories(app, live);
+              var selectedId = _categoryId ?? (live.isNotEmpty ? live.first.id : _allId);
               if (!categories.any((c) => c.id == selectedId)) selectedId = _allId;
               final channels = _channels(app, catalog, selectedId);
               return Padding(

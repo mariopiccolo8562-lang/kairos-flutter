@@ -8,7 +8,7 @@ App streaming stile Netflix per **Fire TV (Fire OS)**, Android TV e telefoni And
 2. Il fornitore lo attiva dal pannello e assegna le playlist (Xtream o M3U): l'app si sblocca da sola (controlla ogni 12 secondi).
 3. In alternativa: **Collega con codice a 6 cifre**, generato da un'altra TV già attiva (Impostazioni → «Collega un'altra TV»).
 
-Dal pannello funzionano: attivazione e scadenza, playlist (anche più di una, con scelta in Impostazioni), cambio DNS, manutenzione, **Disconnetti**, limite di visioni contemporanee, permessi, messaggi, collegamento di altre TV. In *Utenti online* la versione compare come `plus 0.1.N`.
+Dal pannello funzionano: attivazione e scadenza, playlist (anche più di una, con scelta in Impostazioni), cambio DNS, manutenzione, **Disconnetti**, limite di visioni contemporanee, permessi (anche «modalità leggera» e «risoluzione e FPS» nel lettore), messaggi, collegamento di altre TV, Home configurabile (categorie in primo piano e nascoste). In *Utenti online* la versione compare come `plus 0.1.N`; quando l'app va in sfondo o si chiude il pannello la vede subito non in linea.
 
 ## Cosa c'è
 

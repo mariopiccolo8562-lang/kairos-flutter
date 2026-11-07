@@ -26,6 +26,7 @@ import androidx.annotation.OptIn
 import androidx.media3.common.C
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlaybackException
 import androidx.media3.exoplayer.ExoPlayer
@@ -140,6 +141,12 @@ class PlayerActivity : Activity() {
     private var fillB0 = 0L
     private var lastStatsEvent = 0L
 
+    // --- riquadro qualità · risoluzione · FPS dei canali in diretta (permesso «resInd» del pannello)
+    private var resInd = true
+    private var resKnown = false // primo fotogramma del canale già a schermo
+    private var resHeight = 0
+    private var resUntil = 0L
+
     private lateinit var pv: PlayerView
     private lateinit var topBox: LinearLayout
     private lateinit var bottomBox: LinearLayout
@@ -158,6 +165,7 @@ class PlayerActivity : Activity() {
     private lateinit var nowV: TextView
     private lateinit var nextV: TextView
     private lateinit var hintV: TextView
+    private lateinit var resV: TextView
 
     private val hideR = Runnable { hideOverlay() }
     private val tuneR = Runnable {
@@ -168,6 +176,7 @@ class PlayerActivity : Activity() {
     private val retryR = Runnable { open() }
     private val seekR = Runnable { commitSeek() }
     private val holdR = Runnable { pollHold() }
+    private val resR = Runnable { updateRes() }
     private val statusHideR = Runnable {
         statusV.visibility = View.GONE
         statusTimed = false
@@ -246,6 +255,7 @@ class PlayerActivity : Activity() {
             val j = JSONObject(s)
             ua = j.optString("ua").ifEmpty { ua }
             devClass = j.optString("playerClass")
+            resInd = j.optBoolean("resInd", true)
             val a = j.optJSONArray("items") ?: JSONArray()
             val list = ArrayList<Item>()
             for (i in 0 until a.length()) {
@@ -330,6 +340,21 @@ class PlayerActivity : Activity() {
 
         override fun onRenderedFirstFrame() {
             if (ttff == 0L && openAt > 0) ttff = SystemClock.elapsedRealtime() - openAt
+            // primo fotogramma del canale: qualità, risoluzione e FPS per qualche secondo
+            if (!resKnown) {
+                resKnown = true
+                player?.videoSize?.height?.let { if (it > 0) resHeight = it }
+                flashRes(6_000)
+            }
+        }
+
+        override fun onVideoSizeChanged(videoSize: VideoSize) {
+            // qualità adattiva: a ogni cambio di risoluzione il riquadro torna per qualche secondo
+            val hgt = videoSize.height
+            if (hgt <= 0) return
+            val changed = resKnown && resHeight > 0 && hgt != resHeight
+            resHeight = hgt
+            if (changed) flashRes(4_000) else updateRes()
         }
 
         override fun onPlayerError(error: PlaybackException) {
@@ -385,6 +410,10 @@ class PlayerActivity : Activity() {
         Adaptive.mode = Adaptive.modeFor(url, item.live)
         val now = SystemClock.elapsedRealtime()
         openAt = now
+        resKnown = false
+        resHeight = 0
+        resUntil = 0L
+        updateRes()
         bufferingSince = now
         readyOnce = false
         firstReadyAt = 0L
@@ -531,6 +560,7 @@ class PlayerActivity : Activity() {
         statusV.visibility = View.GONE
         pauseV.visibility = View.GONE
         player?.stop()
+        updateRes()
         val hint = buildString {
             append("OK per riprovare")
             altName()?.let { append("  ·  ▶ prova in $it") }
@@ -662,6 +692,7 @@ class PlayerActivity : Activity() {
             fill = (p.bufferedPosition - fillB0).toDouble() / (now - firstReadyAt)
         }
         if (overlayShown()) updateTexts()
+        if (::resV.isInitialized && resV.visibility == View.VISIBLE) updateRes() // es. FPS noti dopo
         if (!item.live) {
             savePos()
             if (now - lastProgressEvent > 10_000) {
@@ -709,6 +740,7 @@ class PlayerActivity : Activity() {
         msgV.visibility = View.GONE
         statusV.visibility = View.GONE
         errorShown = false
+        resKnown = false // il riquadro torna con il primo fotogramma del canale nuovo
         cancelHold()
         player?.pause()
         showOverlay()
@@ -721,6 +753,7 @@ class PlayerActivity : Activity() {
         zapBuf += n.toString()
         zapV.text = zapBuf
         zapV.visibility = View.VISIBLE
+        updateRes()
         h.removeCallbacks(zapR)
         h.postDelayed(zapR, 1_500)
     }
@@ -729,6 +762,7 @@ class PlayerActivity : Activity() {
         val n = zapBuf.toIntOrNull()
         zapBuf = ""
         zapV.visibility = View.GONE
+        updateRes()
         if (n == null) return
         val i = items.indexOfFirst { it.num == n }
         if (i < 0) {
@@ -869,11 +903,13 @@ class PlayerActivity : Activity() {
                 h.removeCallbacks(zapR)
                 zapBuf = ""
                 zapV.visibility = View.GONE
+                updateRes()
             }
             overlayShown() && !isPausedVod() && !errorShown -> {
                 h.removeCallbacks(hideR)
                 topBox.visibility = View.GONE
                 bottomBox.visibility = View.GONE
+                updateRes()
             }
             else -> leave()
         }
@@ -943,6 +979,7 @@ class PlayerActivity : Activity() {
         bottomBox.visibility = View.VISIBLE
         h.removeCallbacks(hideR)
         h.postDelayed(hideR, ms)
+        updateRes()
     }
 
     private fun hideOverlay() {
@@ -954,6 +991,7 @@ class PlayerActivity : Activity() {
         }
         topBox.visibility = View.GONE
         bottomBox.visibility = View.GONE
+        updateRes()
     }
 
     private fun toggleOverlay() {
@@ -961,9 +999,49 @@ class PlayerActivity : Activity() {
             h.removeCallbacks(hideR)
             topBox.visibility = View.GONE
             bottomBox.visibility = View.GONE
+            updateRes()
         } else {
             showOverlay()
         }
+    }
+
+    /** riquadro qualità · risoluzione · FPS per [ms] millisecondi (e sempre mentre è aperta la barra informazioni) */
+    private fun flashRes(ms: Long) {
+        if (!resInd || items.isEmpty() || !cur().live) return
+        resUntil = SystemClock.elapsedRealtime() + ms
+        h.removeCallbacks(resR)
+        h.postDelayed(resR, ms + 50)
+        updateRes()
+    }
+
+    /** solo canali in diretta, dopo il primo fotogramma; mai con un errore a schermo o mentre si digita un numero */
+    private fun updateRes() {
+        if (!::resV.isInitialized) return
+        val show = resInd && resKnown && items.isNotEmpty() && cur().live && !errorShown && zapV.visibility != View.VISIBLE &&
+            (overlayShown() || SystemClock.elapsedRealtime() < resUntil)
+        val text = if (show) resLabel() else ""
+        if (text.isEmpty()) {
+            resV.visibility = View.GONE
+            return
+        }
+        if (resV.text.toString() != text) resV.text = text
+        resV.visibility = View.VISIBLE
+    }
+
+    /** es. «FHD · 1080p · 50 fps» (FPS omessi se il formato non li dice) */
+    private fun resLabel(): String {
+        val p = player ?: return ""
+        val f = p.videoFormat
+        val hgt = p.videoSize.height.takeIf { it > 0 } ?: f?.height?.takeIf { it > 0 } ?: resHeight
+        if (hgt <= 0) return ""
+        val q = when {
+            hgt >= 2000 -> "4K"
+            hgt >= 1000 -> "FHD"
+            hgt >= 700 -> "HD"
+            else -> "SD"
+        }
+        val fps = f?.frameRate ?: -1f
+        return if (fps > 0f) "$q · ${hgt}p · ${Math.round(fps)} fps" else "$q · ${hgt}p"
     }
 
     private fun updateTexts() {
@@ -1144,6 +1222,15 @@ class PlayerActivity : Activity() {
             visibility = View.GONE
         }
         root.addView(msgV, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.CENTER))
+        // in alto a destra, sotto l'orologio della barra informazioni: qualità, risoluzione e FPS (solo diretta)
+        resV = label(13f, Color.WHITE, true).apply {
+            setPadding(dp(10), dp(5), dp(10), dp(5))
+            background = rounded(0xB3000000.toInt(), dp(6))
+            isFocusable = false
+            isFocusableInTouchMode = false
+            visibility = View.GONE
+        }
+        root.addView(resV, FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.END).apply { setMargins(0, dp(60), dp(48), 0) })
         statusV = label(14f, Color.WHITE).apply {
             setPadding(dp(14), dp(8), dp(14), dp(8))
             background = rounded(0xCC000000.toInt(), dp(20))

@@ -231,6 +231,25 @@ class PanelState {
   }
 }
 
+/// Risposta del pannello a un battito.
+class BeatReply {
+  const BeatReply(this.status, this.body, {this.wait = 0});
+
+  /// Pannello non raggiungibile.
+  static const BeatReply failed = BeatReply(0, null);
+
+  /// Codice HTTP (0 = nessuna risposta).
+  final int status;
+
+  /// Dati del battito accettato (solo con HTTP 200).
+  final Map<String, dynamic>? body;
+
+  /// Con HTTP 429: secondi da aspettare prima del prossimo battito (0 = non indicati).
+  final int wait;
+
+  bool get ok => status == 200 && body != null;
+}
+
 /// API del pannello per i dispositivi (/api/player/…), le stesse delle altre app Kairos.
 class PanelClient {
   PanelClient({
@@ -338,7 +357,9 @@ class PanelClient {
 
   /// Battito per «Online ora» e per i comandi del pannello (Disconnetti, cambi…).
   /// [stats]: misure del lettore (Kairos Adaptive, sezione 9): bw, line, dev, fill, ttff, stallMs, fmt, drop, net.
-  Future<Map<String, dynamic>?> heartbeat({
+  /// [vis]: true = l'app è in primo piano (menu o visione); false = è appena andata in sfondo
+  /// (il pannello la mostra subito non in linea e quel battito non conta per il limite dei 15 secondi).
+  Future<BeatReply> heartbeat({
     required String state,
     String title = '',
     String channel = '',
@@ -349,10 +370,12 @@ class PanelClient {
     Map<String, Object?> cfg = const {},
     String rcv = '',
     Map<String, Object?> stats = const {},
+    bool vis = true,
   }) async {
     try {
       final r = await _post('/api/player/heartbeat', {
         ..._auth(),
+        'vis': vis,
         'state': state,
         'title': title,
         'ch': channel,
@@ -371,9 +394,11 @@ class PanelClient {
         if (stats.isNotEmpty) 'stats': stats, // banda, classi, stalli, formato del lettore
         if (kickAck > 0) 'kickAck': kickAck,
       });
-      return r.status == 200 ? r.body : null;
+      // troppi battiti (meno di 15 s dall'ultimo): il pannello dice quanti secondi aspettare
+      if (r.status == 429) return BeatReply(429, null, wait: asInt(r.body?['wait']) ?? 0);
+      return BeatReply(r.status, r.status == 200 ? r.body : null);
     } on PanelException {
-      return null;
+      return BeatReply.failed;
     }
   }
 

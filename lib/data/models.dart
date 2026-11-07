@@ -1,4 +1,5 @@
 import '../core/json.dart';
+import 'home_rules.dart';
 
 enum MediaKind { live, movie, series }
 
@@ -483,8 +484,9 @@ class Catalog {
   final bool partial;
 
   /// Piccola parte del catalogo per aprire subito la Home all'avvio (novità,
-  /// prime categorie, preferiti); il catalogo completo arriva subito dopo.
-  Catalog homeSnapshot(Iterable<String> favoriteKeys) {
+  /// categorie della Home, preferiti); il catalogo completo arriva subito dopo.
+  /// [rules]: Home decisa dal pannello (categorie in primo piano e nascoste).
+  Catalog homeSnapshot(Iterable<String> favoriteKeys, {HomeRules? rules}) {
     const perCategory = 80;
     final keys = <String>{};
     void addAll(Iterable<MediaItem> items) {
@@ -495,11 +497,16 @@ class Catalog {
 
     addAll(recentMovies);
     addAll(recentSeries);
-    if (liveCategories.isNotEmpty) addAll(inCategory(MediaKind.live, liveCategories.first.id).take(perCategory));
-    for (final c in movieCategories.take(4)) {
+    final home = (rules ?? HomeRules.none).layout(this);
+    for (final (kind, c) in home.top) {
+      addAll(inCategory(kind, c.id).take(perCategory));
+    }
+    final live = home.live;
+    if (live != null) addAll(inCategory(MediaKind.live, live.id).take(perCategory));
+    for (final c in home.movies) {
       addAll(inCategory(MediaKind.movie, c.id).take(perCategory));
     }
-    for (final c in seriesCategories.take(2)) {
+    for (final c in home.series) {
       addAll(inCategory(MediaKind.series, c.id).take(perCategory));
     }
     for (final key in favoriteKeys) {

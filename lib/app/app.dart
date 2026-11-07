@@ -41,7 +41,7 @@ class _KairosPlusAppState extends State<KairosPlusApp> {
       old.dispose();
     } else if (cmd == 'exit') {
       _controller.remoteCmd.value = null;
-      SystemNavigator.pop();
+      _controller.beforeExit().whenComplete(SystemNavigator.pop);
     }
   }
 

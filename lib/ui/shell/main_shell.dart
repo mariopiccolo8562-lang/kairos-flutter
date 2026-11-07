@@ -252,7 +252,9 @@ class _MainShellState extends State<MainShell> {
         message: 'L\'app verrà chiusa.',
         confirmLabel: 'Esci',
       );
-      if (exit) await SystemNavigator.pop();
+      if (!exit) return;
+      await _app.beforeExit(); // il pannello la vede subito non in linea
+      await SystemNavigator.pop();
     } else {
       _tabNodes[_tab]!.requestFocus();
     }

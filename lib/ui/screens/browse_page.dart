@@ -113,7 +113,8 @@ class _BrowsePageState extends State<BrowsePage> {
     }
 
     addRow('lista', 'La mia lista', app.favoriteItems(widget.kind));
-    for (final category in catalog.categories(widget.kind)) {
+    // prima le categorie in primo piano decise dal pannello, in fondo quelle nascoste dalla Home
+    for (final category in app.homeRules.order(catalog.categories(widget.kind))) {
       if (app.parentalLockedCategory(widget.kind, category.id)) {
         // categoria per adulti con il controllo genitori attivo: niente locandine, un solo riquadro che chiede il PIN
         addRow('cat:${category.id}', '🔒 ${category.name}', [

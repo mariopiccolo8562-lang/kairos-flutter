@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kairos_plus/core/json.dart';
+import 'package:kairos_plus/data/home_rules.dart';
 import 'package:kairos_plus/data/models.dart';
 import 'package:kairos_plus/data/sources/m3u_source.dart';
 import 'package:kairos_plus/data/sources/xtream_source.dart';
@@ -180,5 +181,81 @@ void main() {
     expect(json['kind'], 'live');
     expect(json['alt'], ['http://s/live/u/p/5.m3u8']);
     expect(PlaybackItem.fromJson(item.toJson())?.kind, MediaKind.live);
+  });
+
+  group('Home decisa dal pannello', () {
+    test('nomi confrontati senza maiuscole, accenti e spazi doppi', () {
+      expect(normalizeCategoryName('  Prime   VIDÉO  '), 'prime video');
+      expect(normalizeCategoryName('Çinéma Française'), 'cinema francaise');
+      expect(normalizeCategoryName('Cine\u0301ma'), 'cinema'); // accento già separato dalla lettera
+    });
+
+    test('voci separate da virgola, punto e virgola o a capo; nascosta vince su primo piano', () {
+      final rules = HomeRules.parse('Sport, Prime Video;\nNetflix,, ', 'adult, xxx, 18+');
+      expect(rules.top, ['sport', 'prime video', 'netflix']);
+      expect(rules.hide, ['adult', 'xxx', '18+']);
+      expect(rules.topRank('IT | SKY SPORT HD'), 0);
+      expect(rules.topRank('Prime  Vidéo'), 1);
+      expect(rules.topRank('Netflix Adult'), -1);
+      expect(rules.hidden('Film per ADULTI'), isTrue);
+      expect(rules.hidden('VM 18+'), isTrue);
+      expect(rules.hidden('Commedia'), isFalse);
+      expect(HomeRules.parse('', ' , ').isEmpty, isTrue);
+    });
+
+    test('elenchi: prima in primo piano (ordine delle voci), poi le altre, in fondo le nascoste', () {
+      const cats = [
+        Category(id: 'a', name: 'Cinema'),
+        Category(id: 'b', name: 'XXX Hot'),
+        Category(id: 'c', name: 'Netflix Serie'),
+        Category(id: 'd', name: 'Sport 1'),
+        Category(id: 'e', name: 'Documentari'),
+        Category(id: 'f', name: 'Sport 2'),
+        Category(id: 'g', name: 'Prime Video'),
+      ];
+      final ordered = HomeRules.parse('sport, prime video, netflix', 'xxx').order(cats);
+      expect([for (final c in ordered) c.id], ['d', 'f', 'g', 'c', 'a', 'e', 'b']);
+      expect(identical(HomeRules.none.order(cats), cats), isTrue);
+    });
+
+    test('righe della Home: primo piano, poi le solite senza nascoste e senza doppioni', () {
+      MediaItem movie(String cat) => MediaItem(kind: MediaKind.movie, id: 'm$cat', name: 'Film $cat', categoryId: cat, added: cat.codeUnitAt(1));
+      final catalog = Catalog.build(
+        liveCategories: const [Category(id: 'l1', name: 'Intrattenimento'), Category(id: 'l2', name: 'SKY SPORT')],
+        movieCategories: const [
+          Category(id: 'c1', name: 'Azione'),
+          Category(id: 'c2', name: 'Adulti XXX'),
+          Category(id: 'c3', name: 'Commedia'),
+          Category(id: 'c4', name: 'Netflix'),
+          Category(id: 'c5', name: 'Horror'),
+          Category(id: 'c6', name: 'Drammatico'),
+        ],
+        seriesCategories: const [],
+        live: const [
+          MediaItem(kind: MediaKind.live, id: '1', name: 'Rai 1', categoryId: 'l1'),
+          MediaItem(kind: MediaKind.live, id: '2', name: 'Sky Sport 1', categoryId: 'l2'),
+        ],
+        movies: [for (final c in ['c1', 'c2', 'c3', 'c4', 'c5', 'c6']) movie(c)],
+        series: const [],
+        fetchedAt: 1,
+      );
+      final rules = HomeRules.parse('netflix, sport', 'xxx');
+      final home = rules.layout(catalog);
+      expect(home.top.map((e) => '${e.$1.name}:${e.$2.id}').toList(), ['movie:c4', 'live:l2']);
+      expect(home.live?.id, 'l1');
+      expect([for (final c in home.movies) c.id], ['c1', 'c3', 'c5', 'c6']);
+      expect(rules.hiddenIds(catalog, MediaKind.movie), {'c2'});
+
+      final usual = HomeRules.none.layout(catalog);
+      expect(usual.top, isEmpty);
+      expect(usual.live?.id, 'l1');
+      expect([for (final c in usual.movies) c.id], ['c1', 'c2', 'c3', 'c4']);
+
+      // la copia veloce della Home ha anche le categorie in primo piano
+      final quick = catalog.homeSnapshot(const [], rules: rules);
+      expect(quick.byKey('movie:mc4'), isNotNull);
+      expect(quick.byKey('live:2'), isNotNull);
+      expect(rules.layout(quick).top.map((e) => e.$2.id).toList(), ['c4', 'l2']);
+    });
   });
 }
