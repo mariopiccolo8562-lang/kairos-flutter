@@ -501,8 +501,8 @@ class Catalog {
     for (final (kind, c) in home.top) {
       addAll(inCategory(kind, c.id).take(perCategory));
     }
-    final live = home.live;
-    if (live != null) addAll(inCategory(MediaKind.live, live.id).take(perCategory));
+    final firstLive = home.live;
+    if (firstLive != null) addAll(inCategory(MediaKind.live, firstLive.id).take(perCategory));
     for (final c in home.movies) {
       addAll(inCategory(MediaKind.movie, c.id).take(perCategory));
     }
