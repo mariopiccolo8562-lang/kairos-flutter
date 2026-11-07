@@ -16,8 +16,10 @@ class M3uSource extends ContentSource {
     if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
       throw const SourceException('Link M3U non valido');
     }
-    final text = await fetchText(uri, timeout: const Duration(seconds: 60));
-    final catalog = parseM3uCatalog(text);
+    // riga per riga mentre arriva: il testo intero della lista (decine di MB) non sta mai in memoria
+    final parser = M3uParser();
+    await fetchLines(uri, parser.add, timeout: const Duration(seconds: 60));
+    final catalog = parser.build();
     if (catalog.isEmpty) throw const SourceException('La lista M3U non contiene contenuti');
     return catalog;
   }
@@ -31,35 +33,45 @@ final RegExp _attributePattern = RegExp(r'([\w-]+)="([^"]*)"');
 /// Legge una lista M3U. I contenuti on demand (indirizzi con /movie/ o
 /// /series/, oppure file .mp4/.mkv) finiscono nei Film, il resto nei canali.
 Catalog parseM3uCatalog(String text) {
-  final live = <MediaItem>[];
-  final movies = <MediaItem>[];
-  final liveCategories = <String, Category>{};
-  final movieCategories = <String, Category>{};
-
-  String? name;
-  String? logo;
-  String? group;
-  String? epgId;
-
+  final parser = M3uParser();
   for (final raw in const LineSplitter().convert(text)) {
+    parser.add(raw);
+  }
+  return parser.build();
+}
+
+/// Lettura di una lista M3U una riga alla volta (anche mentre arriva dalla rete), con le regole di
+/// [parseM3uCatalog].
+class M3uParser {
+  final List<MediaItem> _live = <MediaItem>[];
+  final List<MediaItem> _movies = <MediaItem>[];
+  final Map<String, Category> _liveCategories = <String, Category>{};
+  final Map<String, Category> _movieCategories = <String, Category>{};
+
+  String? _name;
+  String? _logo;
+  String? _group;
+  String? _epgId;
+
+  void add(String raw) {
     final line = raw.trim();
-    if (line.isEmpty) continue;
+    if (line.isEmpty) return;
 
     if (line.startsWith('#EXTINF')) {
       final attrs = <String, String>{
         for (final m in _attributePattern.allMatches(line)) m.group(1)!.toLowerCase(): m.group(2)!.trim(),
       };
-      name = _nameAfterComma(line) ?? _nonEmpty(attrs['tvg-name']);
-      logo = _nonEmpty(attrs['tvg-logo']);
-      group = _nonEmpty(attrs['group-title']);
-      epgId = _nonEmpty(attrs['tvg-id']);
+      _name = _nameAfterComma(line) ?? _nonEmpty(attrs['tvg-name']);
+      _logo = _nonEmpty(attrs['tvg-logo']);
+      _group = _nonEmpty(attrs['group-title']);
+      _epgId = _nonEmpty(attrs['tvg-id']);
     } else if (line.startsWith('#EXTGRP:')) {
-      group = _nonEmpty(line.substring(8));
+      _group = _nonEmpty(line.substring(8));
     } else if (line.startsWith('#')) {
-      continue;
+      return;
     } else {
-      final title = name ?? 'Senza nome';
-      final groupName = group ?? 'Altri';
+      final title = _name ?? 'Senza nome';
+      final groupName = _group ?? 'Altri';
       final categoryId = 'g:$groupName';
       final isVod = _isVod(line);
       final item = MediaItem(
@@ -67,35 +79,35 @@ Catalog parseM3uCatalog(String text) {
         id: _hash(line),
         name: title,
         categoryId: categoryId,
-        image: logo,
-        epgId: epgId,
+        image: _logo,
+        epgId: _epgId,
         url: line,
         year: isVod ? yearFromTitle(title) : null,
-        number: isVod ? null : live.length + 1,
+        number: isVod ? null : _live.length + 1,
       );
       if (isVod) {
-        movies.add(item);
-        movieCategories.putIfAbsent(categoryId, () => Category(id: categoryId, name: groupName));
+        _movies.add(item);
+        _movieCategories.putIfAbsent(categoryId, () => Category(id: categoryId, name: groupName));
       } else {
-        live.add(item);
-        liveCategories.putIfAbsent(categoryId, () => Category(id: categoryId, name: groupName));
+        _live.add(item);
+        _liveCategories.putIfAbsent(categoryId, () => Category(id: categoryId, name: groupName));
       }
-      name = null;
-      logo = null;
-      group = null;
-      epgId = null;
+      _name = null;
+      _logo = null;
+      _group = null;
+      _epgId = null;
     }
   }
 
-  return Catalog.build(
-    liveCategories: liveCategories.values.toList(),
-    movieCategories: movieCategories.values.toList(),
-    seriesCategories: const <Category>[],
-    live: live,
-    movies: movies,
-    series: const <MediaItem>[],
-    fetchedAt: DateTime.now().millisecondsSinceEpoch,
-  );
+  Catalog build() => Catalog.build(
+        liveCategories: _liveCategories.values.toList(),
+        movieCategories: _movieCategories.values.toList(),
+        seriesCategories: const <Category>[],
+        live: _live,
+        movies: _movies,
+        series: const <MediaItem>[],
+        fetchedAt: DateTime.now().millisecondsSinceEpoch,
+      );
 }
 
 bool _isVod(String url) {

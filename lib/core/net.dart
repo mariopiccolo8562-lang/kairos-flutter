@@ -61,6 +61,40 @@ Future<String> fetchText(Uri uri, {Duration timeout = const Duration(seconds: 30
   }
 }
 
+/// Scarica un indirizzo di testo riga per riga mentre arriva: [onLine] riceve ogni riga (senza «a capo»),
+/// così le liste lunghe (M3U con decine di migliaia di voci) non stanno mai tutte in memoria come testo.
+/// Stessi tempi e stessi messaggi di errore di [fetchText].
+Future<void> fetchLines(
+  Uri uri,
+  void Function(String line) onLine, {
+  Duration timeout = const Duration(seconds: 30),
+}) async {
+  final client = _client();
+  try {
+    final request = await client.getUrl(uri).timeout(timeout);
+    request.headers.set(HttpHeaders.userAgentHeader, userAgent);
+    final response = await request.close().timeout(timeout);
+    if (response.statusCode != HttpStatus.ok) {
+      await response.drain<void>();
+      throw SourceException('Il server ha risposto con errore ${response.statusCode}');
+    }
+    await response
+        .transform(const Utf8Decoder(allowMalformed: true))
+        .transform(const LineSplitter())
+        .forEach(onLine)
+        .timeout(const Duration(minutes: 3));
+  } on SocketException {
+    throw const SourceException('Server non raggiungibile: controlla la connessione');
+  } on HandshakeException {
+    throw const SourceException('Connessione sicura (HTTPS) non riuscita');
+  } on TimeoutException {
+    closeClient(force: true); // la connessione rimasta appesa non va riusata
+    throw const SourceException('Il server non risponde (tempo scaduto)');
+  } on HttpException catch (e) {
+    throw SourceException('Errore di rete: ${e.message}');
+  }
+}
+
 /// Byte iniziali tenuti da parte solo per riconoscere una risposta vuota o di soli spazi.
 const int _blankProbe = 4096;
 

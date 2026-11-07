@@ -117,6 +117,26 @@ void main() {
       expect(catalog.categoryName(MediaKind.live, 'nessuna'), '');
     });
 
+    test('lista M3U letta riga per riga mentre arriva: stesso catalogo del testo intero', () async {
+      const text = '\uFEFF#EXTM3U\r\n'
+          '#EXTINF:-1 tvg-id="rai1" tvg-logo="http://x/l.png" group-title="Italia",Rai 1\r\n'
+          'http://srv/live/u/p/1.ts\r\n'
+          '\r\n'
+          '#EXTINF:-1,Canale senza gruppo è\n'
+          '#EXTGRP:Sport\n'
+          'http://srv/live/u/p/2.ts\n'
+          '#EXTINF:-1 group-title="Film",Titolo, con virgola (2021)\r'
+          'http://srv/movie/u/p/10.mkv';
+      routes['/lista.m3u'] = text;
+      final streamed = await M3uSource(at('/lista.m3u').toString()).fetchCatalog();
+      final whole = parseM3uCatalog(text);
+      Map<String, Object?> body(Catalog c) => {...c.toJson()}..remove('t');
+      expect(jsonEncode(body(streamed)), jsonEncode(body(whole)));
+      expect([for (final c in streamed.live) c.name], ['Rai 1', 'Canale senza gruppo è']);
+      expect(streamed.live.last.categoryId, 'g:Sport');
+      expect(streamed.movies.single.year, '2021');
+    });
+
     test('la cache su file si scrive in UTF-8 a pezzi e si rilegge identica', () {
       final dir = io.Directory.systemTemp.createTempSync('kairos_test');
       try {
