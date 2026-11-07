@@ -244,9 +244,36 @@ class AppController {
     final earlyHome = wasActive ? CatalogRepository.readHome() : null;
     final earlyCache = wasActive ? CatalogRepository.readCache() : null;
 
+    // impostazioni salvate: le richieste partono tutte insieme (una alla volta erano una ventina di andate e
+    // ritorni con la parte Android, che all'avvio sulle chiavette si sentono)
+    final settingsWait = (
+      _store.loadBgUpdate(),
+      _store.loadUpdSeen(),
+      _store.loadLiteMode(),
+      _store.loadRemote(),
+      _store.loadPreviewMode(),
+      _store.loadParental(),
+      _store.loadPin(),
+      _store.loadPinLater(),
+      _store.loadServer(),
+    ).wait;
+    final userWait = (
+      _store.loadFavorites(),
+      _store.loadProgress(),
+      _store.loadLiveFormat(),
+      _store.loadSeenMessages(),
+      _store.loadPlaylistChoice(),
+      _store.loadCatalogSignature(),
+      _store.loadPrivacyOk(),
+      _store.loadKickSeen(),
+      _store.loadIdentity(),
+    ).wait;
+
     device = await NativeBridge.device();
-    _bgUpdate = await _store.loadBgUpdate();
-    _updSeen = await _store.loadUpdSeen();
+    final (savedBg, savedUpdSeen, savedLite, savedRemote, savedPreview, savedParental, savedPin, savedPinLater, savedServer) =
+        await settingsWait;
+    _bgUpdate = savedBg;
+    _updSeen = savedUpdSeen;
     _updater = AppUpdater(
       feedUrl: Brand.updateFeed,
       currentCode: device.versionCode,
@@ -261,9 +288,9 @@ class AppController {
     net.userAgent =
         'Mozilla/5.0 (Linux; Android ${device.release.isEmpty ? '9' : device.release}; ${model.isEmpty ? 'Android' : model}) KairosPlus/$appVersion';
 
-    _liteMode = await _store.loadLiteMode();
+    _liteMode = savedLite;
     {
-      final (rc, rcv) = await _store.loadRemote();
+      final (rc, rcv) = savedRemote;
       try {
         _rc = rc.isEmpty ? const <String, dynamic>{} : asMap(jsonDecode(rc));
       } on FormatException {
@@ -271,33 +298,33 @@ class AppController {
       }
       _rcv = rcv;
     }
-    _previewMode = await _store.loadPreviewMode();
-    _parental = await _store.loadParental();
-    _pin = await _store.loadPin();
-    _pinLater = await _store.loadPinLater();
+    _previewMode = savedPreview;
+    _parental = savedParental;
+    _pin = savedPin;
+    _pinLater = savedPinLater;
     _permLite = cachedState?.perm('lite') ?? true; // permesso dell'ultimo stato: niente cambio di grafica all'avvio
     _applyLite();
 
-    _favorites = await _store.loadFavorites();
-    _progress = await _store.loadProgress();
-    _userLiveFormat = await _store.loadLiveFormat();
+    final (savedFavorites, savedProgress, savedFormat, savedSeen, savedPlaylist, savedSig, savedPrivacy, savedKick, savedIdentity) =
+        await userWait;
+    _favorites = savedFavorites;
+    _progress = savedProgress;
+    _userLiveFormat = savedFormat;
     _applyLiveFormat();
-    _seenMessages = await _store.loadSeenMessages();
-    _playlistChoice = await _store.loadPlaylistChoice();
-    _catalogSig = await _store.loadCatalogSignature();
-    _privacyOk = await _store.loadPrivacyOk();
-    _kickSeen = await _store.loadKickSeen();
+    _seenMessages = savedSeen;
+    _playlistChoice = savedPlaylist;
+    _catalogSig = savedSig;
+    _privacyOk = savedPrivacy;
+    _kickSeen = savedKick;
 
-    var identity = await _store.loadIdentity();
-    var id = identity == null ? null : PanelIdentity(identity.$1, identity.$2);
+    var id = savedIdentity == null ? null : PanelIdentity(savedIdentity.$1, savedIdentity.$2);
     if (id == null || !id.isValid) {
       id = PanelIdentity.generate();
       await _store.saveIdentity(id.code, id.secret);
     }
-    final saved = await _store.loadServer();
     _panel = PanelClient(
       identity: id,
-      server: saved != null && saved.startsWith('https://') ? saved : kDefaultPanelUrl,
+      server: savedServer != null && savedServer.startsWith('https://') ? savedServer : kDefaultPanelUrl,
       model: device.model,
       version: appVersion,
       fallbacks: [kDefaultPanelUrl, ...kFallbackPanelUrls],
