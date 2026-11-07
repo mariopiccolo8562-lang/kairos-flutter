@@ -488,10 +488,12 @@ class Catalog {
   /// [rules]: Home decisa dal pannello (categorie in primo piano e nascoste).
   Catalog homeSnapshot(Iterable<String> favoriteKeys, {HomeRules? rules}) {
     const perCategory = 80;
-    final keys = <String>{};
+    // scelte per tipo e identificativo (come per chiave «tipo:id», ma senza creare una stringa per ogni voce
+    // del catalogo: con decine di migliaia di voci si sente)
+    final ids = {for (final kind in MediaKind.values) kind: <String>{}};
     void addAll(Iterable<MediaItem> items) {
       for (final item in items) {
-        keys.add(item.key);
+        ids[item.kind]!.add(item.id);
       }
     }
 
@@ -510,11 +512,12 @@ class Catalog {
       addAll(inCategory(MediaKind.series, c.id).take(perCategory));
     }
     for (final key in favoriteKeys) {
-      if (_byKey.containsKey(key)) keys.add(key);
+      final item = _byKey[key];
+      if (item != null) ids[item.kind]!.add(item.id);
     }
     List<MediaItem> pick(List<MediaItem> items) => [
           for (final item in items)
-            if (keys.contains(item.key)) item,
+            if (ids[item.kind]!.contains(item.id)) item,
         ];
     return Catalog.build(
       liveCategories: liveCategories,
@@ -575,14 +578,34 @@ class Catalog {
   /// Categoria per adulti (dal nome): il controllo genitori la protegge con il PIN.
   bool isAdultCategory(MediaKind kind, String categoryId) =>
       _adultCat.putIfAbsent('${kind.name}|$categoryId', () => isAdultText(categoryName(kind, categoryId)));
+
+  /// Esito già calcolato per ogni voce: le file e «Tutti i canali» lo chiedono a ogni ridisegno (la ricerca
+  /// nel nome costa, con migliaia di voci).
+  final Expando<bool> _adultItem = Expando<bool>();
   /// Titolo o canale per adulti: categoria per adulti, oppure nome esplicito.
-  bool isAdult(MediaItem x) => isAdultCategory(x.kind, x.categoryId) || adultNameRx.hasMatch(x.name);
+  bool isAdult(MediaItem x) => _adultItem[x] ??= isAdultCategory(x.kind, x.categoryId) || adultNameRx.hasMatch(x.name);
+
+  /// Nome di ogni categoria per identificativo (il primo con quell'identificativo, come prima), pronto alla prima
+  /// richiesta: l'elenco dei canali per il lettore ne chiede uno per canale.
+  late final Map<String, String> _liveNames = _names(liveCategories);
+  late final Map<String, String> _movieNames = _names(movieCategories);
+  late final Map<String, String> _seriesNames = _names(seriesCategories);
+
+  static Map<String, String> _names(List<Category> categories) {
+    final names = <String, String>{};
+    for (final c in categories) {
+      names.putIfAbsent(c.id, () => c.name);
+    }
+    return names;
+  }
 
   String categoryName(MediaKind kind, String categoryId) {
-    for (final c in categories(kind)) {
-      if (c.id == categoryId) return c.name;
-    }
-    return '';
+    final names = switch (kind) {
+      MediaKind.live => _liveNames,
+      MediaKind.movie => _movieNames,
+      MediaKind.series => _seriesNames,
+    };
+    return names[categoryId] ?? '';
   }
 
   MediaItem? byKey(String key) => _byKey[key];
@@ -615,10 +638,25 @@ class Catalog {
         's': [for (final i in series) i.toJson()],
       };
 
+  /// Come [toJson], ma con le voci ancora come [MediaItem]: chi scrive la cache le converte una alla volta,
+  /// così le mappe di decine di migliaia di voci non stanno mai tutte in memoria insieme.
+  Map<String, Object?> toCacheJson() => {
+        'v': 1,
+        't': fetchedAt,
+        if (partial) 'partial': 1,
+        'lc': [for (final c in liveCategories) c.toJson()],
+        'mc': [for (final c in movieCategories) c.toJson()],
+        'sc': [for (final c in seriesCategories) c.toJson()],
+        'l': live,
+        'm': movies,
+        's': series,
+      };
+
+  /// Accetta anche le voci già convertite durante la lettura della cache.
   static Catalog fromJson(Object? json) {
     final m = asMap(json);
     List<Category> cats(String key) => [for (final c in asList(m[key])) Category.fromJson(c)];
-    List<MediaItem> list(String key) => [for (final i in asList(m[key])) MediaItem.fromJson(i)];
+    List<MediaItem> list(String key) => [for (final i in asList(m[key])) i is MediaItem ? i : MediaItem.fromJson(i)];
     return Catalog.build(
       liveCategories: cats('lc'),
       movieCategories: cats('mc'),

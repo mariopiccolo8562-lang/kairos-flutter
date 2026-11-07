@@ -61,13 +61,59 @@ Future<String> fetchText(Uri uri, {Duration timeout = const Duration(seconds: 30
   }
 }
 
-Future<Object?> fetchJson(Uri uri, {Duration timeout = const Duration(seconds: 30)}) async {
-  final text = await fetchText(uri, timeout: timeout);
-  if (text.trim().isEmpty) return null;
+/// Byte iniziali tenuti da parte solo per riconoscere una risposta vuota o di soli spazi.
+const int _blankProbe = 4096;
+
+/// Scarica un indirizzo e ne legge il JSON mentre arriva, direttamente dai byte UTF-8: il testo intero
+/// non sta mai in memoria (con decine di migliaia di titoli erano decine di MB, il doppio se c'è anche un
+/// solo carattere non latino). [reviver], come in [JsonDecoder], riceve ogni valore appena letto: gli
+/// elenchi grandi lo usano per convertire subito ogni voce, così il JSON grezzo non resta tutto in memoria.
+/// Risposta vuota o di soli spazi: null, come prima.
+Future<Object?> fetchJson(
+  Uri uri, {
+  Duration timeout = const Duration(seconds: 30),
+  Object? Function(Object? key, Object? value)? reviver,
+}) async {
+  final client = _client();
   try {
-    return jsonDecode(text);
-  } on FormatException {
-    throw const SourceException('Il server ha inviato una risposta non valida');
+    final request = await client.getUrl(uri).timeout(timeout);
+    request.headers.set(HttpHeaders.userAgentHeader, userAgent);
+    final response = await request.close().timeout(timeout);
+    if (response.statusCode != HttpStatus.ok) {
+      await response.drain<void>();
+      throw SourceException('Il server ha risposto con errore ${response.statusCode}');
+    }
+    final head = <int>[];
+    var small = true;
+    final bytes = response.map((List<int> chunk) {
+      if (small) {
+        if (head.length + chunk.length <= _blankProbe) {
+          head.addAll(chunk);
+        } else {
+          small = false;
+          head.clear();
+        }
+      }
+      return chunk;
+    });
+    try {
+      return await bytes
+          .transform(const Utf8Decoder(allowMalformed: true).fuse(JsonDecoder(reviver)))
+          .single
+          .timeout(const Duration(minutes: 3));
+    } on FormatException {
+      if (small && utf8.decode(head, allowMalformed: true).trim().isEmpty) return null;
+      throw const SourceException('Il server ha inviato una risposta non valida');
+    }
+  } on SocketException {
+    throw const SourceException('Server non raggiungibile: controlla la connessione');
+  } on HandshakeException {
+    throw const SourceException('Connessione sicura (HTTPS) non riuscita');
+  } on TimeoutException {
+    closeClient(force: true); // la connessione rimasta appesa non va riusata
+    throw const SourceException('Il server non risponde (tempo scaduto)');
+  } on HttpException catch (e) {
+    throw SourceException('Errore di rete: ${e.message}');
   }
 }
 

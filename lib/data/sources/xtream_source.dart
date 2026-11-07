@@ -51,9 +51,9 @@ class XtreamSource extends ContentSource {
       fetchJson(_api({'action': 'get_series_categories'})),
     ]);
     const long = Duration(seconds: 90);
-    final live = _parseList(await fetchJson(_api({'action': 'get_live_streams'}), timeout: long), _live);
-    final movies = _parseList(await fetchJson(_api({'action': 'get_vod_streams'}), timeout: long), _movie);
-    final series = _parseList(await fetchJson(_api({'action': 'get_series'}), timeout: long), _series);
+    final live = _parseList(await fetchJson(_api({'action': 'get_live_streams'}), timeout: long, reviver: _items(_live)));
+    final movies = _parseList(await fetchJson(_api({'action': 'get_vod_streams'}), timeout: long, reviver: _items(_movie)));
+    final series = _parseList(await fetchJson(_api({'action': 'get_series'}), timeout: long, reviver: _items(_series)));
     return Catalog.build(
       liveCategories: _categories(categories[0]),
       movieCategories: _categories(categories[1]),
@@ -232,11 +232,17 @@ class XtreamSource extends ContentSource {
     return result;
   }
 
-  static List<MediaItem> _parseList(Object? json, MediaItem? Function(Map<String, dynamic>) parse) {
+  /// Elenchi grandi (decine di migliaia di voci): ogni voce, appena letta, diventa un [MediaItem] (o null se
+  /// non è valida), così il JSON grezzo dell'elenco non resta mai tutto in memoria. Le voci sono gli oggetti
+  /// dentro un elenco; tutti gli altri valori restano come sono.
+  static Object? Function(Object? key, Object? value) _items(MediaItem? Function(Map<String, dynamic>) parse) =>
+      (key, value) => key is int && value is Map<String, dynamic> ? parse(value) : value;
+
+  /// Le voci già convertite da [_items], nell'ordine del server (quelle non valide sono saltate).
+  static List<MediaItem> _parseList(Object? json) {
     final result = <MediaItem>[];
     for (final raw in asList(json)) {
-      final item = parse(asMap(raw));
-      if (item != null) result.add(item);
+      if (raw is MediaItem) result.add(raw);
     }
     return result;
   }

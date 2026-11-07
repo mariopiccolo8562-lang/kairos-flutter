@@ -1,6 +1,11 @@
+import 'dart:convert';
+import 'dart:io' as io;
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kairos_plus/app/perf.dart';
 import 'package:kairos_plus/core/json.dart';
+import 'package:kairos_plus/core/net.dart' as net;
+import 'package:kairos_plus/data/catalog_repository.dart';
 import 'package:kairos_plus/data/home_rules.dart';
 import 'package:kairos_plus/data/models.dart';
 import 'package:kairos_plus/data/sources/m3u_source.dart';
@@ -32,6 +37,144 @@ void main() {
         expect([tmdbWidthFor(88), tmdbWidthFor(224), tmdbWidthFor(1120)], [185, 185, 780]);
       } finally {
         Perf.weak = before;
+      }
+    });
+  });
+
+  group('Rete e cache del catalogo', () {
+    late io.HttpServer server;
+    // azione Xtream (o percorso) → corpo della risposta (testo) oppure codice HTTP di errore
+    final routes = <String, Object>{};
+
+    setUpAll(() async {
+      io.HttpOverrides.global = null; // client HTTP vero verso il server locale di prova
+      server = await io.HttpServer.bind(io.InternetAddress.loopbackIPv4, 0);
+      server.listen((request) {
+        final body = routes[request.uri.queryParameters['action'] ?? request.uri.path];
+        if (body is int) {
+          request.response.statusCode = body;
+        } else if (body is String) {
+          request.response.add(utf8.encode(body));
+        }
+        request.response.close();
+      });
+    });
+
+    tearDownAll(() async {
+      net.closeClient(force: true);
+      await server.close(force: true);
+    });
+
+    Uri at(String path) => Uri.parse('http://127.0.0.1:${server.port}$path');
+
+    test('JSON letto mentre arriva: vuoto e spazi valgono null, il resto come prima', () async {
+      routes['/vuota'] = '';
+      routes['/spazi'] = ' \n\t ';
+      routes['/ok'] = '{"a":[1,2.5,"è",null,true]}';
+      routes['/rotta'] = '{"a":';
+      routes['/errore'] = 404;
+      expect(await net.fetchJson(at('/vuota')), isNull);
+      expect(await net.fetchJson(at('/spazi')), isNull);
+      expect(await net.fetchJson(at('/ok')), {
+        'a': [1, 2.5, 'è', null, true],
+      });
+      await expectLater(net.fetchJson(at('/rotta')), throwsA(isA<net.SourceException>()));
+      await expectLater(net.fetchJson(at('/errore')), throwsA(isA<net.SourceException>()));
+    });
+
+    test('catalogo Xtream: ogni voce convertita mentre arriva, con gli stessi dati di prima', () async {
+      routes['get_live_categories'] = '[{"category_id":"1","category_name":"Italia"}]';
+      routes['get_vod_categories'] = '[{"category_id":2,"category_name":"Azione"}]';
+      routes['get_series_categories'] = '[]';
+      routes['get_live_streams'] =
+          '[{"num":1,"name":"Rai 1","stream_id":10,"stream_icon":"http://x/r1.png","epg_channel_id":"rai1",'
+          '"category_id":"1","added":"1700000000","category_ids":[1]},'
+          '{"name":"senza id"},"rotto",{"num":2,"name":"Rai 2","stream_id":"11","category_id":null}]';
+      routes['get_vod_streams'] =
+          '[{"name":"Film (2021)","stream_id":20,"category_id":"2","rating":"7.5","container_extension":"mkv"},'
+          '{"name":"Altro","stream_id":21,"category_id":"2","rating_5based":4,"year":"2019"}]';
+      routes['get_series'] = '';
+      final account = Account(
+        type: AccountType.xtream,
+        server: 'http://127.0.0.1:${server.port}',
+        username: 'u',
+        password: 'p',
+      );
+      final catalog = await XtreamSource(account).fetchCatalog();
+      expect([for (final c in catalog.live) '${c.id}|${c.name}|${c.categoryId}|${c.number}|${c.epgId}|${c.added}'], [
+        '10|Rai 1|1|1|rai1|1700000000',
+        '11|Rai 2|$uncategorizedId|2|null|0',
+      ]);
+      expect(catalog.live.first.image, 'http://x/r1.png');
+      final film = catalog.movies.first;
+      expect([film.name, film.year, film.rating, film.extension], ['Film (2021)', '2021', 7.5, 'mkv']);
+      final other = catalog.movies.last;
+      expect([other.year, other.rating, other.extension], ['2019', 8.0, 'mp4']);
+      expect(catalog.series, isEmpty);
+      expect(catalog.categoryName(MediaKind.live, '1'), 'Italia');
+      expect(catalog.categoryName(MediaKind.movie, '2'), 'Azione');
+      expect(catalog.categoryName(MediaKind.live, uncategorizedId), 'Altri');
+      expect(catalog.categoryName(MediaKind.live, 'nessuna'), '');
+    });
+
+    test('la cache su file si scrive in UTF-8 a pezzi e si rilegge identica', () {
+      final dir = io.Directory.systemTemp.createTempSync('kairos_test');
+      try {
+        final catalog = Catalog.build(
+          liveCategories: const [Category(id: '1', name: 'Italia')],
+          movieCategories: const [Category(id: '2', name: 'Azione «è»')],
+          seriesCategories: const [],
+          live: [
+            for (var i = 0; i < 3000; i++)
+              MediaItem(kind: MediaKind.live, id: '$i', name: 'Canale $i ✓', categoryId: '1', number: i, image: 'http://x/$i.png'),
+          ],
+          movies: const [
+            MediaItem(
+              kind: MediaKind.movie,
+              id: '20',
+              name: 'Sintel',
+              categoryId: '2',
+              year: '2010',
+              rating: 7.5,
+              added: 5,
+              plot: 'Trama "tra virgolette"\ne a capo',
+            ),
+          ],
+          series: const [],
+          fetchedAt: 42,
+        );
+        final path = '${dir.path}${io.Platform.pathSeparator}catalogo.json';
+        writeCatalogFile(path, catalog.toCacheJson());
+        expect(io.File(path).readAsBytesSync(), utf8.encode(jsonEncode(catalog.toJson())));
+        expect(io.File('$path.part').existsSync(), isFalse);
+        final copy = readCatalogFile(path);
+        if (copy == null) fail('cache non riletta');
+        expect(jsonEncode(copy.toJson()), jsonEncode(catalog.toJson()));
+        expect(copy.categoryName(MediaKind.movie, '2'), 'Azione «è»');
+        expect(readCatalogFile('${dir.path}${io.Platform.pathSeparator}manca.json'), isNull);
+        io.File(path).writeAsStringSync('{"l":[{"k":0');
+        expect(readCatalogFile(path), isNull);
+      } finally {
+        dir.deleteSync(recursive: true);
+      }
+    });
+
+    test('contenuti per adulti: stesso esito, calcolato una volta per voce', () {
+      final catalog = Catalog.build(
+        liveCategories: const [Category(id: 'a', name: 'XXX Adulti'), Category(id: 'b', name: 'Italia')],
+        movieCategories: const [],
+        seriesCategories: const [],
+        live: const [
+          MediaItem(kind: MediaKind.live, id: '1', name: 'Canale', categoryId: 'a'),
+          MediaItem(kind: MediaKind.live, id: '2', name: 'Brazzers TV', categoryId: 'b'),
+          MediaItem(kind: MediaKind.live, id: '3', name: 'Rai 1', categoryId: 'b'),
+        ],
+        movies: const [],
+        series: const [],
+        fetchedAt: 1,
+      );
+      for (var round = 0; round < 2; round++) {
+        expect([for (final c in catalog.live) catalog.isAdult(c)], [true, true, false]);
       }
     });
   });
