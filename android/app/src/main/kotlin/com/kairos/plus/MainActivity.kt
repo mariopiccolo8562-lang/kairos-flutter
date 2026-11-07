@@ -7,6 +7,7 @@ import android.os.Build
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import kotlin.concurrent.thread
 
 /**
  * Schermata principale (interfaccia Flutter) e ponte verso le parti native:
@@ -68,8 +69,9 @@ class MainActivity : FlutterActivity() {
                         pendingPlay?.success(null)
                         pendingPlay = result
                         try {
+                            // elenchi di migliaia di canali: i dati restano in memoria (nell'Intent supererebbero il limite di Binder)
                             @Suppress("DEPRECATION")
-                            startActivityForResult(Intent(this, PlayerActivity::class.java).putExtra("data", data), REQ_PLAY)
+                            startActivityForResult(PlayerActivity.intentFor(this, data), REQ_PLAY)
                         } catch (e: Exception) {
                             pendingPlay = null
                             result.error("play", e.message ?: "Lettore non disponibile", null)
@@ -81,7 +83,15 @@ class MainActivity : FlutterActivity() {
                     result.success(true)
                 }
                 // aggiornamento dell'app: stato, scaricamento in background, installazione (vedi Updater.kt)
-                "updateStatus" -> result.success(Updater.status(this, (call.argument<Number>("code") ?: 0).toInt()))
+                "updateStatus" -> {
+                    // la verifica dell'APK già scaricato legge tutto il file: mai sul thread principale (scatti, ANR)
+                    val code = (call.argument<Number>("code") ?: 0).toInt()
+                    val app = applicationContext
+                    thread(name = "kx-upd-status") {
+                        val st = try { Updater.status(app, code) } catch (_: Exception) { emptyMap<String, Any>() }
+                        runOnUiThread { result.success(st) }
+                    }
+                }
                 "updatePrefetch" -> {
                     val url = call.argument<String>("url") ?: ""
                     val code = (call.argument<Number>("code") ?: 0).toInt()

@@ -13,6 +13,12 @@ class XtreamSource extends ContentSource {
   String get _user => account.username ?? '';
   String get _pass => account.password ?? '';
 
+  /// Utente e password già codificati per gli indirizzi dei flussi e inizio dell'indirizzo della guida breve:
+  /// l'elenco dei canali per il lettore (anche migliaia) si prepara senza ricodificarli per ogni canale.
+  late final String _u = Uri.encodeComponent(_user);
+  late final String _p = Uri.encodeComponent(_pass);
+  late final String _epgPrefix = _api({'action': 'get_short_epg'}).toString();
+
   Uri _api([Map<String, String> extra = const <String, String>{}]) =>
       Uri.parse('$_server/player_api.php').replace(queryParameters: <String, String>{
         'username': _user,
@@ -167,30 +173,27 @@ class XtreamSource extends ContentSource {
     return result;
   }
 
+  /// Stesso indirizzo di `_api({'action': 'get_short_epg', 'stream_id': id, 'limit': '4'})`, con l'inizio già pronto.
   @override
-  String? epgUrlFor(MediaItem channel) =>
-      _api({'action': 'get_short_epg', 'stream_id': channel.id, 'limit': '4'}).toString();
+  String? epgUrlFor(MediaItem channel) {
+    final id = channel.id;
+    return '$_epgPrefix&stream_id${id.isEmpty ? '' : '=${Uri.encodeQueryComponent(id)}'}&limit=4';
+  }
 
   @override
   String urlFor(MediaItem item, {String liveFormat = 'ts'}) {
-    final u = Uri.encodeComponent(_user);
-    final p = Uri.encodeComponent(_pass);
     switch (item.kind) {
       case MediaKind.live:
-        return '$_server/live/$u/$p/${item.id}.$liveFormat';
+        return '$_server/live/$_u/$_p/${item.id}.$liveFormat';
       case MediaKind.movie:
-        return '$_server/movie/$u/$p/${item.id}.${item.extension ?? 'mp4'}';
+        return '$_server/movie/$_u/$_p/${item.id}.${item.extension ?? 'mp4'}';
       case MediaKind.series:
         return '';
     }
   }
 
   @override
-  String episodeUrl(Episode episode) {
-    final u = Uri.encodeComponent(_user);
-    final p = Uri.encodeComponent(_pass);
-    return '$_server/series/$u/$p/${episode.id}.${episode.extension ?? 'mp4'}';
-  }
+  String episodeUrl(Episode episode) => '$_server/series/$_u/$_p/${episode.id}.${episode.extension ?? 'mp4'}';
 
   /// Ripulisce l'indirizzo scritto dall'utente: aggiunge http:// se manca
   /// e toglie eventuali percorsi (es. /player_api.php).

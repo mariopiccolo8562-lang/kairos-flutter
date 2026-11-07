@@ -1,6 +1,7 @@
 package com.kairos.plus
 
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.content.res.ColorStateList
 import android.graphics.Color
@@ -73,6 +74,21 @@ class PlayerActivity : Activity() {
         private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
         private const val MAX_RETRIES = 8
         private const val RETRY_WINDOW_MS = 5 * 60_000L
+
+        /** oltre questa misura (caratteri) i dati non vanno nell'Intent: col limite di Binder (~1 MB) l'apertura fallirebbe */
+        private const val MAX_EXTRA_CHARS = 200_000
+        /** dati grandi (elenchi di migliaia di canali) lasciati in memoria per l'apertura numero [bigSeq] */
+        private var bigData: String? = null
+        private var bigSeq = 0L
+
+        /** Intent del lettore: i dati piccoli viaggiano nell'Intent come sempre, quelli grandi restano in memoria */
+        fun intentFor(ctx: Context, data: String): Intent {
+            val i = Intent(ctx, PlayerActivity::class.java)
+            if (data.length <= MAX_EXTRA_CHARS) return i.putExtra("data", data)
+            bigSeq++
+            bigData = data
+            return i.putExtra("dataSeq", bigSeq)
+        }
     }
 
     private class Item(
@@ -94,6 +110,7 @@ class PlayerActivity : Activity() {
     private var idx = 0
     private var ua = "KairosPlus"
     private var devClass = "" // D | N | O (da Dart, altrimenti calcolata da Adaptive)
+    private var dataSeq = 0L // apertura con i dati lasciati in memoria (0 = dati nell'Intent)
 
     private var player: ExoPlayer? = null
     private var playerCls = -1 // classe effettiva con cui è stato costruito il lettore
@@ -200,7 +217,7 @@ class PlayerActivity : Activity() {
         super.onCreate(savedInstanceState)
         current = this
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        parse(intent.getStringExtra("data") ?: "")
+        parse(intent.getStringExtra("data") ?: bigDataFor(intent.getLongExtra("dataSeq", 0L)))
         if (items.isEmpty()) {
             finish()
             return
@@ -232,6 +249,8 @@ class PlayerActivity : Activity() {
 
     override fun onDestroy() {
         if (current === this) current = null
+        // i dati grandi di questa apertura non servono più (un'apertura nuova ha il suo numero)
+        if (isFinishing && dataSeq > 0L && dataSeq == bigSeq) bigData = null
         h.removeCallbacksAndMessages(null)
         releasePlayer()
         io.shutdownNow()
@@ -248,6 +267,12 @@ class PlayerActivity : Activity() {
         window.decorView.systemUiVisibility = (View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_FULLSCREEN
             or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
             or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN)
+    }
+
+    /** dati grandi lasciati in memoria da [intentFor] per questa apertura ("" se non ci sono più) */
+    private fun bigDataFor(seq: Long): String {
+        dataSeq = seq
+        return if (seq > 0L && seq == bigSeq) bigData ?: "" else ""
     }
 
     private fun parse(s: String) {

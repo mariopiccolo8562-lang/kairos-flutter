@@ -223,6 +223,35 @@ void main() {
       expect(url, contains('action=get_short_epg'));
       expect(url, contains('stream_id=42'));
     });
+
+    test('indirizzi dei flussi e della guida breve identici a quelli costruiti ogni volta da Uri', () {
+      const accounts = [
+        Account(type: AccountType.xtream, server: 'http://srv:80', username: 'u', password: 'p'),
+        Account(type: AccountType.xtream, server: 'https://srv.example:8443', username: 'mario rossi', password: 'p@ss/w+rd&x=1 è'),
+        Account(type: AccountType.xtream, server: 'http://srv.example', username: 'u', password: ''),
+      ];
+      for (final account in accounts) {
+        final source = XtreamSource(account);
+        final u = Uri.encodeComponent(account.username ?? '');
+        final p = Uri.encodeComponent(account.password ?? '');
+        for (final id in ['42', 'a b', '']) {
+          final channel = MediaItem(kind: MediaKind.live, id: id, name: 'Canale', categoryId: '1');
+          final expected = Uri.parse('${account.server}/player_api.php').replace(queryParameters: {
+            'username': account.username ?? '',
+            'password': account.password ?? '',
+            'action': 'get_short_epg',
+            'stream_id': id,
+            'limit': '4',
+          }).toString();
+          expect(source.epgUrlFor(channel), expected);
+          expect(source.urlFor(channel, liveFormat: 'm3u8'), '${account.server}/live/$u/$p/$id.m3u8');
+        }
+        const movie = MediaItem(kind: MediaKind.movie, id: '7', name: 'Film', categoryId: '2', extension: 'mkv');
+        expect(source.urlFor(movie), '${account.server}/movie/$u/$p/7.mkv');
+        const episode = Episode(id: '9', season: 1, number: 2, title: 'Ep', extension: 'mp4');
+        expect(source.episodeUrl(episode), '${account.server}/series/$u/$p/9.mp4');
+      }
+    });
   });
 
   test('decodifica i testi base64 della guida TV', () {
