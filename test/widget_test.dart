@@ -1,12 +1,41 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:kairos_plus/app/perf.dart';
 import 'package:kairos_plus/core/json.dart';
 import 'package:kairos_plus/data/home_rules.dart';
 import 'package:kairos_plus/data/models.dart';
 import 'package:kairos_plus/data/sources/m3u_source.dart';
 import 'package:kairos_plus/data/sources/xtream_source.dart';
 import 'package:kairos_plus/panel/panel.dart';
+import 'package:kairos_plus/ui/widgets/net_image.dart';
 
 void main() {
+  group('Immagini', () {
+    test('TMDB: misura più piccola adatta alla vista, il resto resta com\'è', () {
+      const base = 'https://image.tmdb.org/t/p/';
+      expect(tmdbSized('${base}original/a.jpg', 342), '${base}w342/a.jpg');
+      expect(tmdbSized('${base}w600_and_h900_bestv2/a.jpg', 342), '${base}w342/a.jpg');
+      expect(tmdbSized('${base}w1280/b.jpg', 780), '${base}w780/b.jpg');
+      expect(tmdbSized('http://image.tmdb.org/t/p/w500/c.png', 185), 'http://image.tmdb.org/t/p/w185/c.png');
+      // già piccole, tagli non 2:3, misure sconosciute e altri server: invariati
+      expect(tmdbSized('${base}w185/a.jpg', 342), '${base}w185/a.jpg');
+      expect(tmdbSized('${base}w1920_and_h800_multi_faces/b.jpg', 780), '${base}w1920_and_h800_multi_faces/b.jpg');
+      expect(tmdbSized('${base}h632/p.jpg', 185), '${base}h632/p.jpg');
+      expect(tmdbSized('http://server.example/w500/a.jpg', 185), 'http://server.example/w500/a.jpg');
+    });
+
+    test('TMDB: locandine w342 (w185 sui dispositivi deboli), sfondi w780', () {
+      final before = Perf.weak;
+      try {
+        Perf.weak = false;
+        expect([tmdbWidthFor(88), tmdbWidthFor(224), tmdbWidthFor(1120)], [185, 342, 780]);
+        Perf.weak = true;
+        expect([tmdbWidthFor(88), tmdbWidthFor(224), tmdbWidthFor(1120)], [185, 185, 780]);
+      } finally {
+        Perf.weak = before;
+      }
+    });
+  });
+
   group('Lista M3U', () {
     test('divide canali e film per categoria', () {
       const text = '#EXTM3U\n'

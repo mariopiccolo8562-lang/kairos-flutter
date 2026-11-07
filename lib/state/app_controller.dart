@@ -308,6 +308,8 @@ class AppController {
     _previewSub = NativeBridge.previewEvents.listen(_onPreviewEvent);
     // presenza: «in sfondo» quando nessuna schermata dell'app è visibile (paused / hidden / detached)
     _lifecycle = AppLifecycleListener(onResume: _onResume, onShow: _onShow, onHide: _onHide, onPause: _onHide, onDetach: _onHide);
+    // lavoro non urgente (tetto della cache delle immagini su disco): ad avvio finito
+    Timer(const Duration(seconds: 20), _trimImages);
 
     // partenza immediata con l'ultimo stato attivo; il pannello si ricontrolla subito dopo
     if (cachedState != null && cachedState.active) {
@@ -692,6 +694,7 @@ class AppController {
   /// La visione è finita: ripartono i lavori rimandati (catalogo, APK, stato del pannello).
   Future<void> _resumeDeferred() async {
     if (_busyWatching) return;
+    if (_trimDue) _trimImages();
     if (_refreshDeferred) unawaited(_refreshInBackground());
     if (_updaterStarted) updater.onPlaybackEnded();
     final deferred = _deferredState;
@@ -699,6 +702,20 @@ class AppController {
       _deferredState = null;
       await _applyState(deferred);
     }
+  }
+
+  /// Tetto della cache su disco delle immagini (D 150 MB, le altre 250 MB): una volta per apertura,
+  /// 20 s dopo l'avvio e mai durante la visione (in quel caso a visione finita).
+  bool _trimDue = false;
+
+  void _trimImages() {
+    if (_disposed) return;
+    if (_busyWatching) {
+      _trimDue = true;
+      return;
+    }
+    _trimDue = false;
+    unawaited(NetImageCache.trimDisk(weak: Perf.weak));
   }
 
   /// È partita una visione: il download dell'APK in corso si ferma.
@@ -951,6 +968,8 @@ class AppController {
     _playerVisible = true;
     _onWatchStart();
     unawaited(_beat(true));
+    // il video ha bisogno di memoria: si liberano le immagini non a schermo (tornano dalla cache su disco)
+    PaintingBinding.instance.imageCache.clear();
     Map<String, dynamic>? result;
     try {
       result = await NativeBridge.play({
@@ -1116,10 +1135,12 @@ class AppController {
   void _applyLite() {
     final mode = liteMode;
     Perf.lite = mode == 'on' || mode == 'max' || (mode == 'auto' && device.isLite);
-    // chiavette con poca memoria: meno immagini tenute in memoria
+    // classe D di Kairos Adaptive (≤ 1,2 GB): immagini più piccole e il tetto più basso in memoria
+    Perf.weak = device.playerClass == 'D';
+    // chiavette con poca memoria: meno immagini tenute in memoria (D 24 MB, grafica leggera 40 MB, le altre 80 MB)
     final imageCache = PaintingBinding.instance.imageCache;
-    imageCache.maximumSize = Perf.lite ? 160 : 250;
-    imageCache.maximumSizeBytes = (Perf.lite ? 40 : 80) << 20;
+    imageCache.maximumSize = Perf.weak ? 120 : (Perf.lite ? 160 : 250);
+    imageCache.maximumSizeBytes = (Perf.weak ? 24 : (Perf.lite ? 40 : 80)) << 20;
   }
 
   /// Permessi del pannello che cambiano la grafica (modalità leggera): si riapplicano a ogni stato nuovo.
