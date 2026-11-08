@@ -67,8 +67,8 @@ class HeroData {
 /// sfumata a destra.
 ///
 /// Pensata per le chiavette: il testo cambia subito, l'immagine grande arriva
-/// solo quando ti fermi su un titolo (e sulle chiavette con poca memoria non
-/// c'è proprio), la scheda completa del film si chiede dopo un attimo di pausa.
+/// solo quando ti fermi su un titolo (con la grafica leggera più piccola, ma
+/// c'è sempre), la scheda completa del film si chiede dopo un attimo di pausa.
 class HeroHeader extends StatefulWidget {
   const HeroHeader({super.key, required this.data, this.height = Layout.heroHeight});
 
@@ -126,8 +126,8 @@ class _HeroHeaderState extends State<HeroHeader> {
     if (mounted && !immediate) setState(() {});
     if (data == null) return;
 
-    // immagine grande: solo se ti fermi sul titolo
-    if (!_lite && !data.isLogo) {
+    // immagine grande: solo se ti fermi sul titolo (anche con la grafica leggera: lì si decodifica più piccola)
+    if (!data.isLogo) {
       final url = data.backdrop ?? data.image;
       if (url != null) {
         if (immediate) {
@@ -149,7 +149,7 @@ class _HeroHeaderState extends State<HeroHeader> {
         if (!mounted || details == null || _data?.id != data.id) return;
         setState(() {
           _details = details;
-          if (!_lite && item.backdrop == null && details.backdrop != null) _backdrop = details.backdrop;
+          if (item.backdrop == null && details.backdrop != null) _backdrop = details.backdrop;
         });
       });
     }
@@ -200,13 +200,15 @@ class _HeroHeaderState extends State<HeroHeader> {
               key: ValueKey<String>('sfondo:$backdrop'),
               url: backdrop,
               title: d.title,
-              decodeWidth: 560,
+              // grafica leggera: circa metà della memoria (immagine un po' meno nitida, mai tolta)
+              decodeWidth: _lite ? 400 : 560,
               alignment: Alignment.topCenter,
               transparentPlaceholder: true,
               fallback: false,
             ),
           ),
-        // le sfumature servono solo sopra un'immagine (con la grafica leggera non ce ne sono)
+        // le sfumature servono solo sopra un'immagine (due gradienti semplici, niente sfocature: vanno bene anche
+        // con la grafica leggera)
         if (backdrop != null && !d.isLogo) ...const [
           Positioned.fill(
             child: DecoratedBox(
