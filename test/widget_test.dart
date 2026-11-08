@@ -13,6 +13,7 @@ import 'package:kairos_plus/data/sources/m3u_source.dart';
 import 'package:kairos_plus/data/sources/xtream_source.dart';
 import 'package:kairos_plus/panel/panel.dart';
 import 'package:kairos_plus/state/app_updater.dart';
+import 'package:kairos_plus/state/remote_quiet.dart';
 import 'package:kairos_plus/ui/widgets/net_image.dart';
 
 void main() {
@@ -577,6 +578,35 @@ void main() {
       await u.onResumed();
       expect(calls, ['updateStatus', 'updateInstall']);
       u.dispose();
+    });
+  });
+
+  group('Controlli a distanza senza avvisi', () {
+    test('reset del PIN nei menu: si chiede subito il nuovo PIN, niente in attesa', () {
+      final p = PinAsk();
+      expect(p.onReset(watching: false), isTrue);
+      expect(p.pending, isFalse);
+      expect(p.onViewEnd(), isFalse);
+    });
+
+    test('reset del PIN durante la visione: il nuovo PIN si chiede a visione finita, una volta sola', () {
+      final p = PinAsk();
+      expect(p.onReset(watching: true), isFalse);
+      expect(p.pending, isTrue);
+      expect(p.onViewEnd(), isTrue);
+      expect(p.onViewEnd(), isFalse);
+    });
+
+    test('nessun avviso sul «fornitore» per «Disconnetti», reset del PIN e permesso', () {
+      final sources = [
+        'lib/state/app_controller.dart',
+        'lib/ui/shell/main_shell.dart',
+        'android/app/src/main/kotlin/com/kairos/plus/MainActivity.kt',
+      ].map((f) => io.File(f).readAsStringSync()).join('\n');
+      expect(sources, isNot(contains('ha chiuso la visione')));
+      expect(sources, isNot(contains('ha reimpostato il PIN')));
+      expect(sources, isNot(contains('Visione interrotta')));
+      expect(sources, contains('per gli aggiornamenti dell\'app'));
     });
   });
 }

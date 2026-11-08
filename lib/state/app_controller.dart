@@ -18,6 +18,7 @@ import '../data/user_store.dart';
 import '../panel/panel.dart';
 import '../ui/widgets/net_image.dart';
 import 'app_updater.dart';
+import 'remote_quiet.dart';
 
 enum SessionStatus { starting, activation, loading, ready, error }
 
@@ -89,9 +90,6 @@ class AppController {
   final ValueNotifier<int> favoritesRevision = ValueNotifier(0);
   final ValueNotifier<int> progressRevision = ValueNotifier(0);
 
-  /// Avvisi da mostrare subito (es. «Disconnetti» dal pannello).
-  final ValueNotifier<String?> notice = ValueNotifier(null);
-
   /// Anteprima del canale nel riquadro (TV in diretta).
   final ValueNotifier<PreviewState> preview = ValueNotifier(const PreviewState.idle());
 
@@ -124,6 +122,8 @@ class AppController {
   bool imposed(String key) => (_rc[key]?.toString() ?? '').isNotEmpty;
   /// Comando dal pannello che l'interfaccia deve eseguire (es. aprire le Impostazioni).
   final ValueNotifier<String?> remoteCmd = ValueNotifier(null);
+  /// PIN reimpostato dal pannello durante la visione: il nuovo PIN si chiede a visione finita.
+  final PinAsk _pinAsk = PinAsk();
   /// Aggiornamento dell'app (feed delle release, scaricamento in background, installazione).
   AppUpdater? _updater;
   AppUpdater get updater => _updater!;
@@ -942,8 +942,8 @@ class AppController {
         _kickSeen = kick;
         unawaited(_store.saveKickSeen(kick));
         stopPreview(release: true);
+        // «Disconnetti» dal pannello: la visione si chiude, senza avvisi al cliente
         if (_watching != null) await NativeBridge.closePlayer();
-        notice.value = 'Il tuo fornitore ha chiuso la visione su questo dispositivo.';
       }
     }
     final s = _state;
@@ -1032,6 +1032,7 @@ class AppController {
       _watching = null;
       _playerVisible = false;
       _inPlayer = false;
+      _pinAskAfterView();
       // di solito l'interfaccia torna visibile subito; se invece l'app è finita in sfondo lo si dice al pannello
       Timer(const Duration(seconds: 2), _visibilityChanged);
     }
@@ -1150,6 +1151,16 @@ class AppController {
     if (_watching?.state != 'live') return;
     _watching = null;
     unawaited(_beat(true));
+    _pinAskAfterView();
+  }
+
+  /// Visione finita con un reset del PIN in attesa: poco dopo (interfaccia di nuovo a schermo) si chiede il nuovo PIN.
+  void _pinAskAfterView() {
+    if (!_pinAsk.pending) return;
+    Timer(const Duration(milliseconds: 1200), () {
+      if (_watching != null) return; // di nuovo in visione: si aspetta la prossima fine
+      if (_pinAsk.onViewEnd()) remoteCmd.value = 'pin';
+    });
   }
 
   void _onPreviewEvent(PreviewEvent e) {
@@ -1293,10 +1304,11 @@ class AppController {
             await panel.cmdAck(id, true, had ? 'permesso già concesso' : 'schermata del permesso aperta sulla TV');
           }
         case 'pin':
+          // senza avvisi sul «fornitore»: si chiede subito il nuovo PIN, come alla prima installazione (a visione finita)
           await setPin('');
           parentalUnlocked = false;
           await panel.cmdAck(id, true, 'PIN riportato a 0000');
-          if (!watching) remoteCmd.value = 'pin';
+          if (_pinAsk.onReset(watching: watching)) remoteCmd.value = 'pin';
         case 'exit':
           await panel.cmdAck(id, true, 'chiusa');
           remoteCmd.value = 'exit';
@@ -1502,7 +1514,6 @@ class AppController {
     liveFormat.dispose();
     favoritesRevision.dispose();
     progressRevision.dispose();
-    notice.dispose();
     remoteCmd.dispose();
     _updater?.dispose();
     preview.dispose();

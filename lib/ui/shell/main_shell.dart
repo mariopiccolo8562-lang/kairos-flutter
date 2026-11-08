@@ -76,7 +76,6 @@ class _MainShellState extends State<MainShell> {
     super.initState();
     _app = AppScope.of(context);
     FocusManager.instance.addListener(_onFocusChanged);
-    _app.notice.addListener(_onNotice);
     _app.panelState.addListener(_onPanelState);
     _app.remoteCmd.addListener(_onRemoteCmd);
     _app.updater.offer.addListener(_onUpdateOffer);
@@ -99,7 +98,6 @@ class _MainShellState extends State<MainShell> {
   @override
   void dispose() {
     FocusManager.instance.removeListener(_onFocusChanged);
-    _app.notice.removeListener(_onNotice);
     _app.panelState.removeListener(_onPanelState);
     _app.remoteCmd.removeListener(_onRemoteCmd);
     _app.updater.offer.removeListener(_onUpdateOffer);
@@ -120,22 +118,14 @@ class _MainShellState extends State<MainShell> {
     if (focused != null && focused != _contentArea && _contentArea.hasFocus) _lastContent = focused;
   }
 
-  void _onNotice() {
-    final message = _app.notice.value;
-    if (message == null || !mounted) return;
-    _app.notice.value = null;
-    showTvMessage(context, title: 'Visione interrotta', message: message);
-  }
-
   void _onPanelState() => _showUnseenMessages();
 
   /// Il pannello ha chiesto di aprire le Impostazioni (controllo remoto).
   void _onRemoteCmd() {
     if (_app.remoteCmd.value == 'pin' && mounted) {
-      // il fornitore ha riportato il PIN a 0000: si chiede subito di sceglierne uno nuovo
+      // PIN riportato a 0000 dal pannello: nessun avviso, si chiede subito di sceglierne uno nuovo (come alla prima installazione)
       _app.remoteCmd.value = null;
-      unawaited(showTvMessage(context, title: 'Controllo genitori', message: 'Il tuo fornitore ha reimpostato il PIN del controllo genitori: ora è 0000.')
-          .then((_) => mounted ? maybeAskParentalPin(context, force: true) : null));
+      unawaited(maybeAskParentalPin(context, force: true));
       return;
     }
     if (_app.remoteCmd.value != 'settings' || !mounted) return;
