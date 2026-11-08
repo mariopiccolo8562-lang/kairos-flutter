@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
@@ -31,6 +32,8 @@ class AppUpdater extends ChangeNotifier {
     required this.watching,
     required this.loadFirstSeen,
     required this.saveFirstSeen,
+    required this.loadPending,
+    required this.savePending,
   }) {
     _sub = NativeBridge.updateEvents.listen(_onEvent);
   }
@@ -53,8 +56,26 @@ class AppUpdater extends ChangeNotifier {
   final Future<void> Function(String) saveFirstSeen;
   String _first = '';
 
+  /// Versione trovata dall'ultimo controllo in rete, salvata su disco (JSON; vuoto = nessuna) e suo salvataggio.
+  final Future<String> Function() loadPending;
+  final Future<void> Function(String) savePending;
+
+  /// Finisce quando la versione salvata è tornata in memoria all'avvio ([restore]): chi apre un video lo aspetta
+  /// (solo letture locali, niente rete), così un aggiornamento obbligatorio non si scavalca nei primi istanti.
+  Future<void> restored = Future<void>.value();
+
+  /// La finestra dell'aggiornamento è aperta (una sola alla volta, per questa apertura dell'app).
+  bool dialogOpen = false;
+
+  /// Una proposta arrivata durante la visione: si mostra appena si torna in un menu.
+  bool _offerLater = false;
+
+  /// Mancava il permesso «Installa app sconosciute»: al ritorno l'installazione riparte da sola.
+  bool _permWait = false;
+
   StreamSubscription<Map<String, dynamic>>? _sub;
   Timer? _timer;
+  bool _disposed = false;
   DateTime? _lastCheck;
   bool _checking = false;
   int _failed = 0;
@@ -97,6 +118,60 @@ class AppUpdater extends ChangeNotifier {
     return DateTime.now().millisecondsSinceEpoch - first >= days * 86400000;
   }
 
+  /// All'avvio, anche senza rete: la versione trovata l'ultima volta torna in memoria e la parte Android dice se il
+  /// suo APK è già scaricato e verificato. Un aggiornamento obbligatorio scaduto blocca così l'app subito, prima di
+  /// qualsiasi visione, senza aspettare il controllo in rete; una versione già pronta si propone subito.
+  Future<void> restore() => restored = _restore();
+
+  Future<void> _restore() async {
+    if (currentCode <= 0) return;
+    try {
+      final m = asMap(jsonDecode(await loadPending()));
+      final code = asInt(m['code']) ?? 0;
+      final url = asString(m['url']) ?? '';
+      if (code > 0 && code <= currentCode) {
+        await savePending(''); // già installata
+        return;
+      }
+      if (pending != null || code <= 0 || !url.startsWith('https://')) return;
+      final u = UpdateInfo(code: code, version: asString(m['version']) ?? '', url: url);
+      await _firstSeen(u);
+      final st = await NativeBridge.updateStatus(code);
+      if (_disposed || pending != null) return; // nel frattempo ha risposto il controllo in rete
+      pending = u;
+      ready = st['ready'] == true;
+      notifyListeners();
+      if (ready) _maybeOffer();
+    } on Object {
+      // nessuna versione salvata (o illeggibile): vale il controllo in rete
+    }
+  }
+
+  /// Aggiornamento obbligatorio scaduto: niente visione, e la finestra che blocca l'app si ripropone.
+  bool remindIfMandatory() {
+    final u = pending;
+    if (u == null || !mustUpdate) return false;
+    _offeredCode = u.code;
+    if (identical(offer.value, u)) offer.value = null;
+    offer.value = u;
+    return true;
+  }
+
+  /// L'app torna in primo piano: se mancava il permesso «Installa app sconosciute» e ora c'è, l'installazione
+  /// chiesta con «Installa ora» riparte da sola.
+  Future<void> onResumed() async {
+    final u = pending;
+    if (!_permWait || u == null) return;
+    _permWait = false;
+    final st = await NativeBridge.updateStatus(u.code);
+    if (_disposed || !identical(pending, u)) return;
+    if (st['canInstall'] == true) {
+      await install();
+    } else {
+      _permWait = true; // ancora senza permesso: si riprova al prossimo ritorno
+    }
+  }
+
   /// Controllo periodico: all'avvio e poi ogni ora.
   void start() {
     _timer?.cancel();
@@ -124,7 +199,10 @@ class AppUpdater extends ChangeNotifier {
 
   /// La visione è finita: il download rimandato riparte (se le condizioni lo permettono).
   void onPlaybackEnded() {
-    if (pending == null || ready || _checking || watching()) return;
+    if (pending == null || watching()) return;
+    // proposta arrivata durante la visione: si mostra ora che si è tornati in un menu (non va persa)
+    if (_offerLater) _maybeOffer();
+    if (ready || _checking) return;
     if (backgroundEnabled() && _failed < 3) unawaited(check());
   }
 
@@ -159,6 +237,7 @@ class AppUpdater extends ChangeNotifier {
       if (code <= currentCode || !url.startsWith('https://')) {
         pending = null;
         ready = false;
+        unawaited(savePending(''));
         if (manual) message = 'Hai già l\'ultima versione ($currentVersion)';
         notifyListeners();
         return null;
@@ -171,6 +250,8 @@ class AppUpdater extends ChangeNotifier {
       }
       pending = u;
       message = null;
+      // su disco: al prossimo avvio (anche senza rete) l'aggiornamento è noto subito
+      unawaited(savePending(jsonEncode({'code': code, 'version': version, 'url': url})));
       await _firstSeen(u);
       final st = await NativeBridge.updateStatus(code);
       ready = st['ready'] == true;
@@ -200,7 +281,13 @@ class AppUpdater extends ChangeNotifier {
 
   void _maybeOffer({bool manual = false}) {
     final u = pending;
-    if (u == null || watching()) return;
+    if (u == null) return;
+    // durante la visione la finestra resterebbe nascosta dietro il lettore: si mostra al ritorno in un menu
+    if (watching()) {
+      _offerLater = true;
+      return;
+    }
+    _offerLater = false;
     if (!manual && !mustUpdate && _offeredCode == u.code) return;
     _offeredCode = u.code;
     offer.value = u;
@@ -227,7 +314,9 @@ class AppUpdater extends ChangeNotifier {
         message = 'Conferma l\'installazione nella schermata di Android';
       case 'perm':
         progress = -1;
-        message = 'Consenti a Kairos Plus di installare app nelle impostazioni che si sono aperte, poi riprova';
+        _permWait = true; // al ritorno dalle impostazioni l'installazione riparte da sola
+        message = 'Manca il permesso «Installa app sconosciute»: attivalo per Kairos Plus nelle impostazioni che si '
+            'sono aperte, poi torna qui e l\'installazione riparte da sola';
       case 'error':
         progress = -1;
         message = 'Aggiornamento non riuscito: ${asString(e['msg']) ?? 'errore'}';
@@ -245,6 +334,7 @@ class AppUpdater extends ChangeNotifier {
 
   @override
   void dispose() {
+    _disposed = true;
     _timer?.cancel();
     _sub?.cancel();
     offer.dispose();

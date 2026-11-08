@@ -32,6 +32,7 @@ class UserStore {
   static const String _kPinLater = 'parental_pin_later';
   static const String _kUpdSeen = 'upd_seen';
   static const String _kUpdFirst = 'upd_first';
+  static const String _kUpdPending = 'upd_pending';
 
   // ---------------------------------------------------------------------------
   // Pannello
@@ -159,6 +160,13 @@ class UserStore {
   Future<String> loadUpdFirst() async => await _prefs.getString(_kUpdFirst) ?? '';
 
   Future<void> saveUpdFirst(String value) => _prefs.setString(_kUpdFirst, value);
+
+  /// Versione nuova trovata dall'ultimo controllo in rete (JSON con codice, versione e indirizzo; vuoto = nessuna):
+  /// si ripristina all'avvio, così un aggiornamento obbligatorio blocca l'app subito, anche senza rete.
+  Future<String> loadUpdPending() async => await _prefs.getString(_kUpdPending) ?? '';
+
+  Future<void> saveUpdPending(String value) =>
+      value.isEmpty ? _prefs.remove(_kUpdPending) : _prefs.setString(_kUpdPending, value);
 
   /// Anteprima dei canali: click (1° OK riquadro, 2° OK schermo intero) | off
   Future<String> loadPreviewMode() async => await _prefs.getString(_kPreviewMode) ?? 'click';

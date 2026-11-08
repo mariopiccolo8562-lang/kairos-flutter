@@ -283,6 +283,8 @@ class AppController {
       watching: () => _watching != null || _busyWatching,
       loadFirstSeen: _store.loadUpdFirst,
       saveFirstSeen: _store.saveUpdFirst,
+      loadPending: _store.loadUpdPending,
+      savePending: _store.saveUpdPending,
     );
     final model = device.rawModel.replaceAll(RegExp(r'[^\x20-\x7E]'), '').trim();
     net.userAgent =
@@ -316,6 +318,9 @@ class AppController {
     _catalogSig = savedSig;
     _privacyOk = savedPrivacy;
     _kickSeen = savedKick;
+    // aggiornamento trovato in un'apertura precedente (anche senza rete): se è obbligatorio e scaduto la finestra
+    // che blocca l'app compare subito, prima di qualsiasi visione (non aspetta il controllo in rete)
+    unawaited(updater.restore());
 
     var id = savedIdentity == null ? null : PanelIdentity(savedIdentity.$1, savedIdentity.$2);
     if (id == null || !id.isValid) {
@@ -355,6 +360,8 @@ class AppController {
       unawaited(_activationTick());
     } else if (status.value == SessionStatus.ready) {
       unawaited(_beat(true));
+      // di ritorno dalle impostazioni del permesso «Installa app sconosciute»: l'installazione riparte da sola
+      unawaited(updater.onResumed());
       if (_updaterStarted) updater.onForeground();
     }
   }
@@ -723,7 +730,8 @@ class AppController {
     if (_busyWatching) return;
     if (_trimDue) _trimImages();
     if (_refreshDeferred) unawaited(_refreshInBackground());
-    if (_updaterStarted) updater.onPlaybackEnded();
+    // anche con l'aggiornamento ripristinato all'avvio senza rete: la proposta rimandata dalla visione si mostra ora
+    _updater?.onPlaybackEnded();
     final deferred = _deferredState;
     if (deferred != null) {
       _deferredState = null;
@@ -747,7 +755,7 @@ class AppController {
 
   /// È partita una visione: il download dell'APK in corso si ferma.
   void _onWatchStart() {
-    if (_updaterStarted) updater.onPlaybackStarted();
+    _updater?.onPlaybackStarted();
   }
 
   // ---------------------------------------------------------------------------
@@ -979,6 +987,15 @@ class AppController {
     final i = index < 0 ? 0 : (index >= items.length ? items.length - 1 : index);
     final item = items[i];
     _inPlayer = true; // da subito: ferma i lavori di fondo e le richieste doppie già durante il controllo del pannello
+    // aggiornamento obbligatorio scaduto (anche ripristinato all'avvio, senza rete): niente visione, prima la finestra
+    final upd = _updater;
+    if (upd != null) {
+      await upd.restored;
+      if (upd.remindIfMandatory()) {
+        _inPlayer = false;
+        return null;
+      }
+    }
     final panel = _panel;
     if (panel != null && (_state?.account?.maxStreams ?? 0) > 0) {
       final block = await panel.stream(item.watchState, item.title);
@@ -1079,6 +1096,12 @@ class AppController {
   /// Restituisce un messaggio se il pannello non consente la visione.
   Future<String?> startPreview(PlaybackItem item, Rect rect) async {
     final seq = ++_previewSeq;
+    // aggiornamento obbligatorio scaduto: niente anteprima, prima la finestra dell'aggiornamento
+    final upd = _updater;
+    if (upd != null) {
+      await upd.restored;
+      if (seq != _previewSeq || upd.remindIfMandatory()) return null;
+    }
     preview.value = PreviewState(item.key, 'loading');
     final panel = _panel;
     // come nelle altre app Kairos l'anteprima è una visione come le altre (limite del pannello)

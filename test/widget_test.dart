@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io' as io;
 
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kairos_plus/app/perf.dart';
 import 'package:kairos_plus/core/json.dart';
@@ -11,6 +12,7 @@ import 'package:kairos_plus/data/models.dart';
 import 'package:kairos_plus/data/sources/m3u_source.dart';
 import 'package:kairos_plus/data/sources/xtream_source.dart';
 import 'package:kairos_plus/panel/panel.dart';
+import 'package:kairos_plus/state/app_updater.dart';
 import 'package:kairos_plus/ui/widgets/net_image.dart';
 
 void main() {
@@ -477,6 +479,104 @@ void main() {
       expect(quick.byKey('movie:mc4'), isNotNull);
       expect(quick.byKey('live:2'), isNotNull);
       expect(rules.layout(quick).top.map((e) => e.$2.id).toList(), ['c4', 'l2']);
+    });
+  });
+
+  group('Aggiornamento dell\'app', () {
+    const channel = MethodChannel('kairos/native');
+    final calls = <String>[];
+    var status = <String, Object?>{'ready': true, 'canInstall': true};
+
+    setUpAll(() {
+      TestWidgetsFlutterBinding.ensureInitialized(); // canale verso Android simulato
+    });
+
+    setUp(() {
+      calls.clear();
+      status = <String, Object?>{'ready': true, 'canInstall': true};
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call.method);
+        return call.method == 'updateStatus' ? status : null;
+      });
+    });
+
+    const saved = '{"code":21,"version":"0.1.21","url":"https://example.org/kairos-plus.apk"}';
+
+    AppUpdater updater({String pending = saved, String first = '21:0', int? days = 0, bool Function()? watching}) => AppUpdater(
+          feedUrl: 'https://example.org/kairos-plus.json',
+          currentCode: 20,
+          currentVersion: '0.1.20',
+          backgroundEnabled: () => true,
+          forceDays: () => days,
+          watching: watching ?? (() => false),
+          loadFirstSeen: () async => first,
+          saveFirstSeen: (_) async {},
+          loadPending: () async => pending,
+          savePending: (_) async {},
+        );
+
+    test('obbligatorio e scaduto: noto subito all\'avvio, senza rete, e si ripropone a ogni tentativo di visione', () async {
+      final u = updater();
+      await u.restore();
+      expect(u.pending?.code, 21);
+      expect(u.ready, isTrue);
+      expect(u.mustUpdate, isTrue);
+      expect(u.offer.value?.code, 21);
+      u.offer.value = null; // la finestra l'ha presa
+      expect(u.remindIfMandatory(), isTrue);
+      expect(u.offer.value?.code, 21);
+      u.dispose();
+    });
+
+    test('non obbligatorio: proposto all\'avvio, ma la visione non si ferma', () async {
+      final u = updater(days: null);
+      await u.restore();
+      expect(u.mustUpdate, isFalse);
+      expect(u.offer.value?.code, 21);
+      u.offer.value = null;
+      expect(u.remindIfMandatory(), isFalse);
+      u.dispose();
+    });
+
+    test('proposta arrivata durante la visione: si mostra al ritorno in un menu', () async {
+      var watching = true;
+      final u = updater(days: null, first: '', watching: () => watching);
+      await u.restore();
+      expect(u.offer.value, isNull);
+      watching = false;
+      u.onPlaybackEnded();
+      expect(u.offer.value?.code, 21);
+      u.dispose();
+    });
+
+    test('versione salvata già installata o APK non ancora scaricato: nessun blocco', () async {
+      final old = updater(pending: '{"code":20,"version":"0.1.20","url":"https://example.org/a.apk"}');
+      await old.restore();
+      expect(old.pending, isNull);
+      old.dispose();
+      status = <String, Object?>{'ready': false, 'canInstall': true};
+      final notReady = updater();
+      await notReady.restore();
+      expect(notReady.pending?.code, 21);
+      expect(notReady.mustUpdate, isFalse);
+      expect(notReady.offer.value, isNull);
+      notReady.dispose();
+    });
+
+    test('senza il permesso «Installa app sconosciute»: lo dice e al ritorno l\'installazione riparte', () async {
+      final u = updater();
+      await u.restore();
+      await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.handlePlatformMessage(
+        'kairos/native',
+        const StandardMethodCodec().encodeMethodCall(const MethodCall('updateEvent', '{"type":"perm"}')),
+        null,
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(u.message, contains('Installa app sconosciute'));
+      calls.clear();
+      await u.onResumed();
+      expect(calls, ['updateStatus', 'updateInstall']);
+      u.dispose();
     });
   });
 }

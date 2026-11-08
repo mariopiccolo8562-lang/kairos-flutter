@@ -81,6 +81,11 @@ class _MainShellState extends State<MainShell> {
     _app.remoteCmd.addListener(_onRemoteCmd);
     _app.updater.offer.addListener(_onUpdateOffer);
     _focusContent();
+    // proposta arrivata prima di questa schermata (es. aggiornamento obbligatorio ripristinato all'avvio):
+    // si mostra subito, prima che si possa aprire un canale
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _onUpdateOffer();
+    });
     // avvisi del fornitore non ancora letti
     Timer(const Duration(milliseconds: 900), () {
       if (mounted) _showUnseenMessages();

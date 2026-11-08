@@ -407,16 +407,16 @@ Future<String?> showPinInput(BuildContext context, {required String title, requi
 
 /// Propone la versione nuova dell'app: «Installa ora» se l'APK è già scaricato in background,
 /// altrimenti «Aggiorna ora» con l'avanzamento del download. Android chiede poi la sua conferma.
-bool _updateDialogOpen = false;
-
+/// Una sola finestra alla volta ([AppUpdater.dialogOpen]: legato a questa apertura dell'app, così un riavvio
+/// dal pannello non lascia il segno di una finestra che non c'è più).
 Future<void> showUpdateDialog(BuildContext context, AppUpdater updater) async {
   final u = updater.pending;
-  if (u == null || _updateDialogOpen) return;
+  if (u == null || updater.dialogOpen) return;
   _pausePreview(context);
   final ready = updater.ready;
   if (updater.mustUpdate) {
     // aggiornamento obbligatorio: si va avanti solo installando (niente «Più tardi», il tasto indietro non chiude)
-    _updateDialogOpen = true;
+    updater.dialogOpen = true;
     try {
       await showDialog<void>(
         context: context,
@@ -460,15 +460,18 @@ Future<void> showUpdateDialog(BuildContext context, AppUpdater updater) async {
         ),
       );
     } finally {
-      _updateDialogOpen = false;
+      updater.dialogOpen = false;
     }
+    // chiusa senza installare (es. comando del pannello che riporta al menu): finché l'aggiornamento è
+    // obbligatorio la finestra torna subito
+    updater.remindIfMandatory();
     return;
   }
-  _updateDialogOpen = true;
+  updater.dialogOpen = true;
   try {
     await _updateDialogNormal(context, updater, u, ready);
   } finally {
-    _updateDialogOpen = false;
+    updater.dialogOpen = false;
   }
 }
 
