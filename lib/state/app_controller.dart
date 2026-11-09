@@ -893,7 +893,6 @@ class AppController {
         await hidden;
         if (!_visible) return 0;
       }
-      final sentAt = _clock.elapsedMilliseconds;
       final call = panel.heartbeat(
         state: w?.state ?? 'idle',
         title: w?.title ?? '',
@@ -914,9 +913,10 @@ class AppController {
       if (r.status == 429) return r.wait > 0 ? r.wait * 1000 : -1;
       final j = r.body;
       if (!r.ok || j == null) return -1;
-      // solo un battito accettato conta per il limite di frequenza: uno fallito o rifiutato si riprova presto
+      // solo un battito accettato conta per il limite di frequenza: uno fallito o rifiutato si riprova presto.
+      // Si conta dalla risposta: dalla partenza, un battito arrivato più in fretta del precedente cadeva prima dei 15 s (429)
       _lastSig = sig;
-      _lastBeat = sentAt;
+      _lastBeat = _clock.elapsedMilliseconds;
       await _handleBeat(j);
       return 0;
     } finally {
