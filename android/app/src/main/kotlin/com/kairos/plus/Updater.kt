@@ -70,15 +70,18 @@ object Updater {
         "canInstall" to (Build.VERSION.SDK_INT < 26 || ctx.packageManager.canRequestPackageInstalls()),
     )
 
-    /** scaricamento in background: nessuna finestra; evento ready | failed | deferred (interrotto dalla visione) */
-    fun prefetch(ctx: Context, url: String, code: Int) {
+    /**
+     * scaricamento in background: nessuna finestra; evento ready | failed | deferred (interrotto dalla visione).
+     * [alts] = dove riprovare se [url] non riesce: lo stesso APK sulle basi successive, alla fine GitHub (da Flutter).
+     */
+    fun prefetch(ctx: Context, url: String, code: Int, alts: List<String> = emptyList()) {
         if (ready(ctx, code)) { event("ready") { put("code", code) }; return }
         if (!busy.compareAndSet(false, true)) return
         cancelBg.set(false)
         thread(name = "kx-apk-bg") {
             try {
                 val out = fileFor(ctx, code)
-                fetch(ctx, url, out, cancelBg, null)
+                fetchAny(ctx, listOf(url) + alts, out, cancelBg, null)
                 readyFile = out; readyCode = code
                 cleanOld(ctx, out)
                 event("ready") { put("code", code) }
@@ -96,14 +99,14 @@ object Updater {
 
     private class CancelledException : Exception("rinviato")
 
-    /** installa: subito se l'APK è pronto, altrimenti lo scarica (eventi progress) e poi apre l'installer */
-    fun install(a: Activity, url: String, code: Int) {
+    /** installa: subito se l'APK è pronto, altrimenti lo scarica (eventi progress; [alts] come in [prefetch]) e poi apre l'installer */
+    fun install(a: Activity, url: String, code: Int, alts: List<String> = emptyList()) {
         if (ready(a, code)) { launch(a, readyFile!!); return }
         if (!busy.compareAndSet(false, true)) { event("busy"); return }
         thread(name = "kx-apk") {
             try {
                 val out = fileFor(a, code)
-                fetch(a, url, out, null) { p -> event("progress") { put("p", p) } }
+                fetchAny(a, listOf(url) + alts, out, null) { p -> event("progress") { put("p", p) } }
                 readyFile = out; readyCode = code
                 cleanOld(a, out)
                 event("progress") { put("p", 100) }
@@ -116,6 +119,27 @@ object Updater {
 
     private fun cleanOld(ctx: Context, keep: File) {
         try { dir(ctx).listFiles()?.forEach { if (it != keep && it.name.endsWith(".apk")) it.delete() } } catch (_: Exception) {}
+    }
+
+    /**
+     * il primo di [urls] che si scarica e si verifica: il link del feed, poi lo stesso APK sulle basi successive e alla
+     * fine GitHub. Il rinvio per la visione ([cancel], [CancelledException]) non è un errore: ferma tutto senza provare
+     * gli altri. Se nessuno riesce, l'errore del primo.
+     */
+    private fun fetchAny(ctx: Context, urls: List<String>, out: File, cancel: AtomicBoolean?, progress: ((Int) -> Unit)?) {
+        var err: Exception? = null
+        for (u in urls.distinct()) {
+            if (cancel?.get() == true) throw CancelledException()
+            try {
+                fetch(ctx, u, out, cancel, progress)
+                return
+            } catch (e: CancelledException) {
+                throw e
+            } catch (e: Exception) {
+                if (err == null) err = e
+            }
+        }
+        throw err ?: Exception("download non riuscito")
     }
 
     /** scarica [url] in [out] seguendo solo redirect https e verifica il file; [cancel] interrompe il download */

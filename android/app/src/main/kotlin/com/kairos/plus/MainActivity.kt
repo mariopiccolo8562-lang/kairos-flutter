@@ -6,6 +6,7 @@ import android.content.Intent
 import android.os.Build
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import kotlin.concurrent.thread
 
@@ -26,6 +27,10 @@ class MainActivity : FlutterActivity() {
             channel?.invokeMethod("previewEvent", org.json.JSONObject().put("key", key).put("state", state).toString())
         } catch (_: Exception) {}
     }.also { preview = it }
+
+    /** link di riserva dell'APK decisi da Flutter (stesso APK sulle basi successive, poi GitHub): solo https */
+    private fun alts(call: MethodCall): List<String> =
+        (call.argument<List<Any?>>("alts") ?: emptyList()).mapNotNull { it as? String }.filter { it.startsWith("https://") }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -95,13 +100,13 @@ class MainActivity : FlutterActivity() {
                 "updatePrefetch" -> {
                     val url = call.argument<String>("url") ?: ""
                     val code = (call.argument<Number>("code") ?: 0).toInt()
-                    if (url.startsWith("https://") && code > 0) Updater.prefetch(this, url, code)
+                    if (url.startsWith("https://") && code > 0) Updater.prefetch(this, url, code, alts(call))
                     result.success(true)
                 }
                 "updateInstall" -> {
                     val url = call.argument<String>("url") ?: ""
                     val code = (call.argument<Number>("code") ?: 0).toInt()
-                    if (url.startsWith("https://") && code > 0) Updater.install(this, url, code)
+                    if (url.startsWith("https://") && code > 0) Updater.install(this, url, code, alts(call))
                     result.success(true)
                 }
                 // è partita la visione: il download in background dell'APK si ferma (riparte a fine visione)

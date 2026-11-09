@@ -291,7 +291,8 @@ class AppController {
     _bgUpdate = savedBg;
     _updSeen = savedUpdSeen;
     _updater = AppUpdater(
-      feedUrl: Brand.updateFeed,
+      feedUrls: updateFeeds(Brand.dlBase, 'plus', Brand.updateFeedFallback),
+      apkUrlsFor: (url) => apkUrls(url, Brand.dlBase, 'plus', Brand.apkFallback),
       currentCode: device.versionCode,
       currentVersion: device.version,
       backgroundEnabled: () => bgUpdate,

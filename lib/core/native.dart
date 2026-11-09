@@ -142,11 +142,11 @@ abstract final class NativeBridge {
     }
   }
 
-  /// Scarica e verifica l'APK in background (evento ready | failed).
-  static Future<void> updatePrefetch(String url, int code) async {
+  /// Scarica e verifica l'APK in background (evento ready | failed); se [url] non riesce, prova [alts] in ordine.
+  static Future<void> updatePrefetch(String url, int code, {List<String> alts = const []}) async {
     _listen();
     try {
-      await _channel.invokeMethod<Object?>('updatePrefetch', {'url': url, 'code': code});
+      await _channel.invokeMethod<Object?>('updatePrefetch', {'url': url, 'code': code, 'alts': alts});
     } on Object catch (e) {
       debugPrint('Scaricamento aggiornamento non partito: $e');
     }
@@ -161,11 +161,12 @@ abstract final class NativeBridge {
     }
   }
 
-  /// Installa: subito se l'APK è pronto, altrimenti lo scarica (eventi progress) e apre l'installer.
-  static Future<void> updateInstall(String url, int code) async {
+  /// Installa: subito se l'APK è pronto, altrimenti lo scarica (eventi progress; se [url] non riesce, da [alts]) e apre
+  /// l'installer.
+  static Future<void> updateInstall(String url, int code, {List<String> alts = const []}) async {
     _listen();
     try {
-      await _channel.invokeMethod<Object?>('updateInstall', {'url': url, 'code': code});
+      await _channel.invokeMethod<Object?>('updateInstall', {'url': url, 'code': code, 'alts': alts});
     } on Object catch (e) {
       debugPrint('Installazione non partita: $e');
     }
