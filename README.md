@@ -10,6 +10,15 @@ App streaming stile Netflix per **Fire TV (Fire OS)**, Android TV e telefoni And
 
 Dal pannello funzionano: attivazione e scadenza, playlist (anche più di una, con scelta in Impostazioni), cambio DNS, manutenzione, **Disconnetti**, limite di visioni contemporanee, permessi (anche «modalità leggera» e «risoluzione e FPS» nel lettore), messaggi, collegamento di altre TV, Home configurabile (categorie in primo piano e nascoste). In *Utenti online* la versione compare come `plus 0.1.N`; quando l'app va in sfondo o si chiude il pannello la vede subito non in linea.
 
+## Adulti fuori dalla Home
+
+Regola comune a tutte le app Kairos (Controllo remoto, chiave `adult`):
+
+- `adult` diverso da `"on"` (anche assente o vuoto, quindi di base): nella Home **nessuna riga e nessun elemento per adulti**: categorie in primo piano e solite righe, titolo in evidenza (se i recenti erano tutti per adulti si prende il primo titolo delle righe della Home), Continua a guardare, La mia lista, I tuoi canali, aggiunti di recente. Una riga che resta vuota non si mostra.
+- Un elemento è per adulti se la sua categoria è per adulti o è nascosta da `home.hide`, oppure se il nome è un titolo per adulti (solo parole forti: «Sex Education» resta). Il riconoscimento (`adultCat`, `adultTitle` in `lib/data/home_rules.dart`) è quello del contratto comune, provato con i suoi 94 esempi (`test/adult_vectors.json`).
+- Negli elenchi (Film, Serie TV, TV in diretta) le categorie per adulti vanno in fondo, come quelle di `home.hide`, e restano raggiungibili; ricerca, guida, zapping e PIN del controllo genitori non cambiano.
+- `adult` = `"on"`: tutto come prima, vale solo `home.hide`.
+
 ## Cosa c'è
 
 - Home stile Netflix: «Continua a guardare», La mia lista, novità, categorie.

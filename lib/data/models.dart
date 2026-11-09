@@ -485,8 +485,10 @@ class Catalog {
 
   /// Piccola parte del catalogo per aprire subito la Home all'avvio (novità,
   /// categorie della Home, preferiti); il catalogo completo arriva subito dopo.
-  /// [rules]: Home decisa dal pannello (categorie in primo piano e nascoste).
-  Catalog homeSnapshot(Iterable<String> favoriteKeys, {HomeRules? rules}) {
+  /// [rules]: Home decisa dal pannello (categorie in primo piano e nascoste, adulti fuori dalla Home).
+  /// [favoriteKeys]: anche i film di «Continua a guardare»; [seriesNames]: le serie dei suoi episodi (per nome), così
+  /// anche nella copia si riconoscono quelli per adulti.
+  Catalog homeSnapshot(Iterable<String> favoriteKeys, {HomeRules? rules, Set<String> seriesNames = const <String>{}}) {
     const perCategory = 80;
     // scelte per tipo e identificativo (come per chiave «tipo:id», ma senza creare una stringa per ogni voce
     // del catalogo: con decine di migliaia di voci si sente)
@@ -514,6 +516,11 @@ class Catalog {
     for (final key in favoriteKeys) {
       final item = _byKey[key];
       if (item != null) ids[item.kind]!.add(item.id);
+    }
+    if (seriesNames.isNotEmpty) {
+      for (final s in series) {
+        if (seriesNames.contains(s.name)) ids[MediaKind.series]!.add(s.id);
+      }
     }
     List<MediaItem> pick(List<MediaItem> items) => [
           for (final item in items)

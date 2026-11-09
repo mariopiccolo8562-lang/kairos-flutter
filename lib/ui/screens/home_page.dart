@@ -30,22 +30,17 @@ class _HomePageState extends State<HomePage> {
     final app = AppScope.of(context);
     final catalog = app.catalog.value;
     if (catalog != null) {
-      final first = _firstRecent(app, catalog);
-      if (first != null) _hero.value = HeroData.fromItem(first);
-    }
-  }
-
-  /// Titolo in evidenza all'apertura: il primo film (o serie) aggiunto di recente che non è
-  /// di una categoria nascosta dal pannello (rc «home.hide»).
-  static MediaItem? _firstRecent(AppController app, Catalog catalog) {
-    final rules = app.homeRules;
-    for (final kind in const [MediaKind.movie, MediaKind.series]) {
-      final hidden = rules.hiddenIds(catalog, kind);
-      for (final item in kind == MediaKind.movie ? catalog.recentMovies : catalog.recentSeries) {
-        if (!hidden.contains(item.categoryId)) return item;
+      // titolo in evidenza all'apertura: il primo film (o serie) aggiunto di recente che non è di una categoria
+      // nascosta dal pannello (rc «home.hide») né, con gli adulti fuori dalla Home, per adulti; se lo erano tutti,
+      // il primo titolo delle righe della Home
+      final first = app.homeRules.heroPick(catalog);
+      if (first != null) {
+        _hero.value = HeroData.fromItem(
+          first,
+          categoryName: first.kind == MediaKind.live ? catalog.categoryName(MediaKind.live, first.categoryId) : null,
+        );
       }
     }
-    return null;
   }
 
   @override
@@ -86,11 +81,15 @@ class _HomePageState extends State<HomePage> {
 
   Widget _rows(AppController app, Catalog catalog) {
     final rows = <RowSpec>[];
-    // Home decisa dal pannello: categorie in primo piano (home.top) e nascoste (home.hide); senza regole come sempre
+    // Home decisa dal pannello: categorie in primo piano (home.top) e nascoste (home.hide); senza regole come sempre.
+    // Adulti fuori dalla Home (rc «adult» diverso da «on»): le categorie per adulti contano come nascoste e in
+    // nessuna riga entra un elemento per adulti (categoria per adulti o nascosta, titolo per adulti)
     final rules = app.homeRules;
     final home = rules.layout(catalog);
     final hiddenMovies = rules.hiddenIds(catalog, MediaKind.movie);
     final hiddenSeries = rules.hiddenIds(catalog, MediaKind.series);
+    // controllo genitori: in Home niente contenuti protetti; con gli adulti fuori dalla Home neanche quelli per adulti
+    bool show(MediaItem x) => !app.parentalLocked(x) && !rules.blocked(catalog, x);
     // il primo elemento della prima fila è il punto d'ingresso dalla barra laterale
     FocusNode? entry = widget.entryNode;
     FocusNode? takeEntry() {
@@ -100,7 +99,7 @@ class _HomePageState extends State<HomePage> {
     }
 
     void addPosterRow(String id, String title, List<MediaItem> raw) {
-      final items = raw.where((x) => !app.parentalLocked(x)).toList(); // controllo genitori: in Home niente contenuti per adulti
+      final items = raw.where(show).toList();
       if (items.isEmpty) return;
       final node = takeEntry();
       rows.add(RowSpec(
@@ -131,7 +130,7 @@ class _HomePageState extends State<HomePage> {
     }
 
     void addChannelRow(String id, String title, List<MediaItem> rawChannels) {
-      final channels = rawChannels.where((x) => !app.parentalLocked(x)).toList();
+      final channels = rawChannels.where(show).toList();
       if (channels.isEmpty) return;
       final node = takeEntry();
       rows.add(RowSpec(
@@ -167,7 +166,8 @@ class _HomePageState extends State<HomePage> {
       ));
     }
 
-    final resume = app.continueWatching();
+    // con gli adulti fuori dalla Home anche qui niente film ed episodi per adulti
+    final resume = rules.resume(catalog, app.continueWatching());
     if (resume.isNotEmpty) {
       final node = takeEntry();
       rows.add(RowSpec(

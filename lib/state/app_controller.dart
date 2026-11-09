@@ -203,16 +203,32 @@ class AppController {
   /// Modalità leggera bloccata nelle Impostazioni: imposta dal pannello o permesso spento («scelta dal fornitore»).
   bool get liteLocked => imposed('lite') || !_permLite;
 
-  /// Home decisa dal pannello: categorie in primo piano (rc «home.top») e nascoste (rc «home.hide»).
+  /// Home decisa dal pannello: categorie in primo piano (rc «home.top») e nascoste (rc «home.hide»); adulti fuori
+  /// dalla Home se rc «adult» non è «on» (anche assente o vuoto). Si ricalcolano quando cambia una delle tre.
   HomeRules get homeRules {
     final top = asString(_rc['home.top']) ?? '';
     final hide = asString(_rc['home.hide']) ?? '';
+    final hideAdult = adultHiddenFromHome(_rc['adult']);
     final current = _homeRules;
-    if (current.source == '$top\n$hide') return current;
-    return _homeRules = HomeRules.parse(top, hide);
+    if (current.source == HomeRules.sourceOf(top, hide, hideAdult)) return current;
+    return _homeRules = HomeRules.parse(top, hide, hideAdult: hideAdult);
   }
 
   HomeRules _homeRules = HomeRules.none;
+
+  /// Voci da tenere nella copia veloce della Home oltre alle righe di categoria: i preferiti e i film di «Continua a
+  /// guardare» (per chiave); le serie dei suoi episodi vanno per nome ([_resumeSeries]). Così anche nella copia si
+  /// riconoscono quelli per adulti.
+  List<String> _homeKeys() => [
+        ..._favorites,
+        for (final p in _progress.values)
+          if (p.item.kind != MediaKind.series) p.item.key,
+      ];
+
+  Set<String> _resumeSeries() => {
+        for (final p in _progress.values)
+          if (p.item.kind == MediaKind.series) p.item.title,
+      };
 
   /// Anteprima dei canali attiva: 1° OK nel riquadro, 2° OK schermo intero.
   bool get previewEnabled => (imposed('preview') ? _rc['preview'].toString() : _previewMode) != 'off';
@@ -637,7 +653,7 @@ class AppController {
       if (cached != null && !cached.isEmpty) {
         catalog.value = cached;
         status.value = SessionStatus.ready;
-        unawaited(CatalogRepository.writeHome(cached, _favorites, rules: homeRules));
+        unawaited(CatalogRepository.writeHome(cached, _homeKeys(), rules: homeRules, seriesNames: _resumeSeries()));
         if (cached.isStale) unawaited(_refreshInBackground());
         return;
       }
@@ -681,9 +697,11 @@ class AppController {
     final rules = homeRules;
     return _fetching ??= CatalogRepository.fetch(
       account,
-      favorites: _favorites,
+      favorites: _homeKeys(),
       homeTop: rules.top.join(','),
       homeHide: rules.hide.join(','),
+      hideAdult: rules.hideAdult,
+      seriesNames: _resumeSeries(),
     ).whenComplete(() {
       _fetching = null;
     });
