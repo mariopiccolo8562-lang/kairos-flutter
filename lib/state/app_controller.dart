@@ -13,6 +13,7 @@ import '../core/net.dart' as net;
 import '../data/catalog_repository.dart';
 import '../data/home_rules.dart';
 import '../data/models.dart';
+import '../data/quality_box.dart';
 import '../data/sources/content_source.dart';
 import '../data/user_store.dart';
 import '../panel/panel.dart';
@@ -174,6 +175,25 @@ class AppController {
       _parental && !parentalUnlocked &&
       ((it.channel != null && (catalog.value?.isAdult(it.channel!) ?? false)) || isAdultText(it.group) || adultNameRx.hasMatch(it.title));
   bool _inPlayer = false;
+
+  /// Riquadro della qualità per il lettore nativo: permesso «resInd» (assente = sì) e voce rc «qbox» già combinati
+  /// (`resInd` = può comparire, `resTag` = con la sigla di qualità; vedi [qualityBoxArgs]).
+  Map<String, bool> get _playerBox => qualityBoxArgs(_state?.perm('resInd') ?? true, _rc['qbox']);
+
+  /// Ultimo riquadro dato al lettore aperto ('' = nessuno).
+  String _playerBoxSent = '';
+
+  static String _boxSig(Map<String, bool> box) => '${box['resInd']}|${box['resTag']}';
+
+  /// Permesso «resInd» o voce «qbox» cambiati con il lettore aperto: il riquadro si riallinea dal suo prossimo
+  /// aggiornamento, anche cambiando canale nel lettore (prima valeva solo dalla visione dopo).
+  Future<void> _syncPlayerBox() async {
+    if (!_inPlayer) return;
+    final box = _playerBox;
+    final sig = _boxSig(box);
+    if (sig == _playerBoxSent) return;
+    if (await NativeBridge.playerBox(box)) _playerBoxSent = sig;
+  }
 
   /// Messaggio da mostrare se il catalogo non si è potuto caricare.
   String? startupError;
@@ -497,6 +517,7 @@ class AppController {
         _state = s;
         panelState.value = s;
         _deferredState = s;
+        unawaited(_syncPlayerBox()); // il riquadro della qualità invece si riallinea subito (permesso «resInd»)
         return;
       }
       await _applyState(s);
@@ -1034,6 +1055,8 @@ class AppController {
     // il video ha bisogno di memoria: si liberano le immagini non a schermo (tornano dalla cache su disco)
     PaintingBinding.instance.imageCache.clear();
     Map<String, dynamic>? result;
+    final box = _playerBox;
+    _playerBoxSent = _boxSig(box);
     try {
       result = await NativeBridge.play({
         'items': [for (final p in items) p.toPlayerJson()],
@@ -1042,8 +1065,9 @@ class AppController {
         'ua': net.userAgent,
         'lite': lite,
         'playerClass': device.playerClass,
-        // permesso «resInd»: riquadro con qualità, risoluzione e FPS sui canali in diretta (assente = sì)
-        'resInd': _state?.perm('resInd') ?? true,
+        // riquadro con qualità, risoluzione e FPS sui canali in diretta: permesso «resInd» (assente = sì) e voce «qbox»
+        // del pannello già combinati (resInd = può comparire, resTag = con la sigla di qualità)
+        ...box,
       });
     } on PlatformException catch (e) {
       return e.message ?? 'Lettore non disponibile';
@@ -1274,6 +1298,7 @@ class AppController {
     final previewBefore = previewEnabled;
     _rc = next;
     _rcv = rcv;
+    unawaited(_syncPlayerBox()); // voce «qbox» cambiata durante la visione
     await _store.saveRemote(raw, rcv);
     _applyLite();
     _applyLiveFormat();
