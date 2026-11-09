@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
@@ -16,26 +17,71 @@ class UpdateInfo {
   final String url;
 }
 
-/// Pannello Kairos: secondo tentativo per il feed, con gli stessi percorsi `/get/<id>.json` dell'indirizzo dei download.
+/// Pannello Kairos: seconda base dei download, con gli stessi percorsi `/get/<id>.json` e `/get/<id>.apk`.
 const String kPanelBase = 'https://panel-kairos.com';
 
-/// Feed degli aggiornamenti da provare, in ordine e senza doppioni (solo https):
-/// 1. `<dlBase>/get/<id>.json`, l'indirizzo dei download (Brand.dlBase, oggi il pannello);
-/// 2. il pannello [kPanelBase], stesso percorso: si salta se è lo stesso indirizzo del primo (oggi lo è);
-/// 3. [fallback], la riserva di oggi su GitHub: quando il repository diventerà privato fallirà senza danni.
-List<String> updateFeeds(String dlBase, String id, String fallback) {
+/// Basi https dei download, in ordine e senza doppioni: [dlBase] (Brand.dlBase, il dominio dedicato ai download),
+/// poi il pannello [kPanelBase].
+List<String> downloadBases(String dlBase) {
   final out = <String>[];
   for (final base in [dlBase, kPanelBase]) {
     var b = base.trim();
     while (b.endsWith('/')) {
       b = b.substring(0, b.length - 1);
     }
-    final u = '$b/get/$id.json';
-    if (b.startsWith('https://') && !out.contains(u)) out.add(u);
+    if (b.startsWith('https://') && !out.contains(b)) out.add(b);
   }
+  return out;
+}
+
+/// Feed degli aggiornamenti da provare, in ordine e senza doppioni (solo https): `/get/<id>.json` su ogni base
+/// ([downloadBases]), poi [fallback], la riserva di oggi su GitHub (con il repository privato fallirà senza danni).
+List<String> updateFeeds(String dlBase, String id, String fallback) {
+  final out = [for (final b in downloadBases(dlBase)) '$b/get/$id.json'];
   final f = fallback.trim();
   if (f.startsWith('https://') && !out.contains(f)) out.add(f);
   return out;
+}
+
+/// APK da provare, in ordine: [url], il link del feed che ha risposto; poi lo stesso APK (`/get/<id>.apk`) sulle basi
+/// successive a quella del link; alla fine [ghApk], l'APK della release più recente su GitHub. Un link fuori dalle
+/// basi (quello del feed di riserva di GitHub) passa direttamente a [ghApk].
+List<String> apkUrls(String url, String dlBase, String id, String ghApk) {
+  final out = <String>[];
+  if (url.startsWith('https://')) out.add(url);
+  final bases = downloadBases(dlBase);
+  final at = bases.indexWhere((b) => url.startsWith('$b/'));
+  if (at >= 0) {
+    for (final b in bases.skip(at + 1)) {
+      final u = '$b/get/$id.apk';
+      if (!out.contains(u)) out.add(u);
+    }
+  }
+  final g = ghApk.trim();
+  if (g.startsWith('https://') && !out.contains(g)) out.add(g);
+  return out;
+}
+
+/// Legge un feed con un client suo, così un indirizzo che non risponde non tocca le connessioni del catalogo:
+/// connessione al massimo 5 s (il dominio dei download non ancora attivo fa passare in fretta al pannello), risposta
+/// al massimo 10 s e 256 KB. Il JSON se la risposta è 200, altrimenti null; HTML o JSON rotto: FormatException.
+Future<Object?> fetchFeedJson(Uri uri) async {
+  final client = HttpClient()
+    ..connectionTimeout = const Duration(seconds: 5)
+    ..userAgent = net.userAgent;
+  try {
+    final request = await client.getUrl(uri).timeout(const Duration(seconds: 10));
+    final response = await request.close().timeout(const Duration(seconds: 10));
+    if (response.statusCode != HttpStatus.ok) return null;
+    final bytes = BytesBuilder(copy: false);
+    await for (final chunk in response.timeout(const Duration(seconds: 10))) {
+      bytes.add(chunk);
+      if (bytes.length > 256 * 1024) return null;
+    }
+    return jsonDecode(utf8.decode(bytes.takeBytes(), allowMalformed: true));
+  } finally {
+    client.close(force: true);
+  }
 }
 
 /// Versione descritta da un feed (version, versionCode, url): null se il JSON non è valido
@@ -71,9 +117,10 @@ int _semverCode(String v) {
 }
 
 /// Aggiornamento dell'app (Kairos Plus).
-/// - Il feed dice qual è l'ultima versione e da dove si scarica l'APK: prima quello del pannello
-///   (`/get/plus.json`, vedi [updateFeeds]), poi, solo se il pannello non risponde, kairos-plus.json della release
-///   più recente su GitHub.
+/// - Il feed dice qual è l'ultima versione e da dove si scarica l'APK: prima quello del dominio dei download
+///   (store-k.download), poi quello del pannello (`/get/plus.json`, vedi [updateFeeds]) e, solo se nessuno dei due
+///   risponde bene, kairos-plus.json della release più recente su GitHub. Se l'APK non si scarica dal link del feed,
+///   la parte nativa prova le basi successive e alla fine GitHub ([apkUrls]).
 /// - Aggiornamento in background (scelta del cliente o imposta dal pannello, acceso di serie): l'APK si scarica
 ///   e si verifica in silenzio (solo su Wi-Fi o cavo, mai durante la visione); quando è pronto si propone
 ///   «Installa ora» e al cliente resta solo la conferma di Android.
@@ -91,6 +138,7 @@ class AppUpdater extends ChangeNotifier {
     required this.loadPending,
     required this.savePending,
     this.fetchFeed,
+    this.apkUrlsFor,
   }) {
     _sub = NativeBridge.updateEvents.listen(_onEvent);
   }
@@ -98,8 +146,11 @@ class AppUpdater extends ChangeNotifier {
   /// Feed da provare in ordine ([updateFeeds]): pannello prima, GitHub di riserva.
   final List<String> feedUrls;
 
-  /// Lettura di un feed (le prove la sostituiscono); null = rete, al massimo 15 secondi per tentativo.
+  /// Lettura di un feed (le prove la sostituiscono); null = rete ([fetchFeedJson]).
   final Future<Object?> Function(Uri uri)? fetchFeed;
+
+  /// APK da provare per il link del feed, in ordine ([apkUrls]); null = solo il link del feed.
+  final List<String> Function(String url)? apkUrlsFor;
 
   final int currentCode;
   final String currentVersion;
@@ -283,8 +334,8 @@ class AppUpdater extends ChangeNotifier {
     if (_checking || currentCode <= 0) return pending;
     _checking = true;
     try {
-      // pannello prima; GitHub solo se il pannello non risponde, risponde con un errore o con un JSON non valido
-      final found = await firstFeed(feedUrls, fetchFeed ?? _fetchFeed);
+      // dominio dei download, poi pannello; GitHub solo se nessuno dei due risponde con un feed valido
+      final found = await firstFeed(feedUrls, fetchFeed ?? fetchFeedJson);
       if (found == null) {
         if (manual) message = 'Impossibile controllare gli aggiornamenti adesso';
         notifyListeners();
@@ -318,7 +369,7 @@ class AppUpdater extends ChangeNotifier {
       final metered = st['metered'] == true;
       // mai durante la visione: il download riparte da onPlaybackEnded quando il lettore si chiude
       if (!ready && !manual && (backgroundEnabled() || force) && (force || !metered) && !watching() && _failed < 3) {
-        await NativeBridge.updatePrefetch(url, code); // l'esito arriva con l'evento ready | failed | deferred
+        await NativeBridge.updatePrefetch(url, code, alts: _alts(url)); // l'esito arriva con l'evento ready | failed | deferred
       } else {
         _maybeOffer(manual: manual);
       }
@@ -336,8 +387,14 @@ class AppUpdater extends ChangeNotifier {
     message = null;
     progress = ready ? 100 : 0;
     notifyListeners();
-    await NativeBridge.updateInstall(u.url, u.code);
+    await NativeBridge.updateInstall(u.url, u.code, alts: _alts(u.url));
   }
+
+  /// Dove riprovare l'APK se il link del feed non riesce: lo stesso APK sulle basi successive, alla fine GitHub.
+  List<String> _alts(String url) => [
+    for (final u in apkUrlsFor?.call(url) ?? const <String>[])
+      if (u != url) u,
+  ];
 
   void _maybeOffer({bool manual = false}) {
     final u = pending;
@@ -385,8 +442,6 @@ class AppUpdater extends ChangeNotifier {
     }
     notifyListeners();
   }
-
-  static Future<Object?> _fetchFeed(Uri uri) => net.fetchJson(uri, timeout: const Duration(seconds: 15));
 
   @override
   void dispose() {

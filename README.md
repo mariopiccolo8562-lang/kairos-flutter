@@ -48,7 +48,7 @@ Ogni modifica su `main` compila l'APK e pubblica la release `v0.1.N` con:
   `https://github.com/mariopiccolo8562-lang/kairos-flutter/releases/latest/download/kairos-plus.apk`
 - `kairos-plus.json` — versione per il pannello.
 
-L'app chiede gli aggiornamenti al pannello, `https://panel-kairos.com/get/plus.json` (indirizzo dei download `Brand.dlBase` in `lib/app/brand.dart`), e scarica l'APK dal link che c'è dentro; solo se il pannello non risponde legge `kairos-plus.json` dell'ultima release (riserva finché il repository è pubblico).
+L'app chiede gli aggiornamenti a `https://store-k.download/get/plus.json` (indirizzo dei download `Brand.dlBase` in `lib/app/brand.dart`), poi al pannello `https://panel-kairos.com/get/plus.json`, e scarica l'APK dal link che c'è dentro (se non riesce, dalle basi successive e alla fine dall'ultima release); solo se nessuno dei due risponde legge `kairos-plus.json` dell'ultima release (riserva finché il repository è pubblico).
 
 ### Firma
 

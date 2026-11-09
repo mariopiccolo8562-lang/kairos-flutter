@@ -3,6 +3,7 @@ import 'dart:io' as io;
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:kairos_plus/app/brand.dart';
 import 'package:kairos_plus/app/perf.dart';
 import 'package:kairos_plus/core/json.dart';
 import 'package:kairos_plus/core/net.dart' as net;
@@ -486,6 +487,7 @@ void main() {
   group('Aggiornamento dell\'app', () {
     const channel = MethodChannel('kairos/native');
     final calls = <String>[];
+    final args = <String, Object?>{}; // argomenti dell'ultima chiamata di ogni metodo
     var status = <String, Object?>{'ready': true, 'canInstall': true};
 
     setUpAll(() {
@@ -494,9 +496,11 @@ void main() {
 
     setUp(() {
       calls.clear();
+      args.clear();
       status = <String, Object?>{'ready': true, 'canInstall': true};
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (call) async {
         calls.add(call.method);
+        args[call.method] = call.arguments;
         return call.method == 'updateStatus' ? status : null;
       });
     });
@@ -565,15 +569,48 @@ void main() {
     });
 
     const github = 'https://github.com/mariopiccolo8562-lang/kairos-flutter/releases/latest/download/kairos-plus.json';
+    const ghApk = 'https://github.com/mariopiccolo8562-lang/kairos-flutter/releases/latest/download/kairos-plus.apk';
+    const dlFeed = 'https://store-k.download/get/plus.json';
     const panelFeed = 'https://panel-kairos.com/get/plus.json';
+    const dlApk = 'https://store-k.download/get/plus.apk';
+    const panelApk = 'https://panel-kairos.com/get/plus.apk';
 
-    test('feed: prima il pannello, GitHub solo di riserva; un dominio dei download nuovo viene prima del pannello', () {
-      // oggi l'indirizzo dei download è il pannello: il secondo tentativo, uguale al primo, si salta
+    test('feed: store-k.download, poi il pannello, poi GitHub (come nell\'app)', () {
+      expect(Brand.dlBase, 'https://store-k.download');
+      expect(updateFeeds(Brand.dlBase, 'plus', Brand.updateFeedFallback), [dlFeed, panelFeed, github]);
+      expect(updateFeeds('https://store-k.download/', 'plus', github), [dlFeed, panelFeed, github]);
+      // con il pannello come indirizzo dei download il doppione si salta
       expect(updateFeeds('https://panel-kairos.com', 'plus', github), [panelFeed, github]);
-      expect(updateFeeds('https://panel-kairos.com/', 'plus', github), [panelFeed, github]);
-      expect(updateFeeds('https://dl.example.com/', 'plus', github), ['https://dl.example.com/get/plus.json', panelFeed, github]);
       expect(updateFeeds('', 'plus', ''), [panelFeed]);
-      expect(updateFeeds('http://dl.example.com', 'plus', github), [panelFeed, github]);
+      expect(updateFeeds('http://store-k.download', 'plus', github), [panelFeed, github]);
+    });
+
+    test('APK: link del feed, poi le basi successive, alla fine GitHub', () {
+      expect(apkUrls(dlApk, Brand.dlBase, 'plus', Brand.apkFallback), [dlApk, panelApk, ghApk]);
+      // feed dal pannello (dominio dei download giù): il dominio dei download non si riprova
+      expect(apkUrls(panelApk, Brand.dlBase, 'plus', ghApk), [panelApk, ghApk]);
+      // feed di riserva di GitHub: il suo link, poi l'ultima release
+      const rel = 'https://github.com/mariopiccolo8562-lang/kairos-flutter/releases/download/v0.1.24/kairos-plus.apk';
+      expect(apkUrls(rel, Brand.dlBase, 'plus', ghApk), [rel, ghApk]);
+      expect(apkUrls(ghApk, Brand.dlBase, 'plus', ghApk), [ghApk]);
+    });
+
+    test('feed: dominio dei download non attivo o parcheggiato → il pannello, GitHub non si chiede', () async {
+      final failures = <Future<Object?> Function()>[
+        () async => throw const io.SocketException('Failed host lookup: store-k.download'),
+        () async => throw const FormatException('<!DOCTYPE html>'), // pagina parcheggiata
+        () async => null, // risposta diversa da 200
+      ];
+      for (final fail in failures) {
+        final asked = <String>[];
+        final u = await firstFeed(updateFeeds(Brand.dlBase, 'plus', github), (uri) async {
+          asked.add('$uri');
+          if ('$uri' == panelFeed) return <String, Object?>{'version': '0.1.24', 'versionCode': 24, 'url': panelApk};
+          return fail();
+        });
+        expect(u?.url, panelApk);
+        expect(asked, [dlFeed, panelFeed]);
+      }
     });
 
     test('feed: con il pannello che risponde GitHub non si chiede e l\'APK arriva dal pannello', () async {
@@ -616,6 +653,44 @@ void main() {
         throw const net.SourceException('Il server ha risposto con errore 404');
       });
       expect(u, isNull);
+    });
+
+    test('controllo: dominio dei download giù, versione dal pannello; la parte nativa riceve le riserve dell\'APK', () async {
+      status = <String, Object?>{'ready': false, 'canInstall': true, 'metered': false};
+      final asked = <String>[];
+      final u = AppUpdater(
+        feedUrls: updateFeeds(Brand.dlBase, 'plus', github),
+        fetchFeed: (uri) async {
+          asked.add('$uri');
+          if (uri.host == 'store-k.download') throw const io.SocketException('Failed host lookup: store-k.download');
+          return <String, Object?>{'version': '0.1.21', 'versionCode': 21, 'url': panelApk};
+        },
+        apkUrlsFor: (url) => apkUrls(url, Brand.dlBase, 'plus', ghApk),
+        currentCode: 20,
+        currentVersion: '0.1.20',
+        backgroundEnabled: () => true,
+        forceDays: () => null,
+        watching: () => false,
+        loadFirstSeen: () async => '',
+        saveFirstSeen: (_) async {},
+        loadPending: () async => '',
+        savePending: (_) async {},
+      );
+      final found = await u.check();
+      expect(found?.url, panelApk);
+      expect(asked, [dlFeed, panelFeed]);
+      expect(args['updatePrefetch'], {
+        'url': panelApk,
+        'code': 21,
+        'alts': [ghApk],
+      });
+      await u.install();
+      expect(args['updateInstall'], {
+        'url': panelApk,
+        'code': 21,
+        'alts': [ghApk],
+      });
+      u.dispose();
     });
 
     test('controllo: pannello giù, la versione nuova arriva dalla riserva e si scarica dal link del feed', () async {
@@ -681,6 +756,57 @@ void main() {
       await u.onResumed();
       expect(calls, ['updateStatus', 'updateInstall']);
       u.dispose();
+    });
+  });
+
+  group('Feed degli aggiornamenti dalla rete', () {
+    late io.HttpServer server;
+    final routes = <String, Object>{};
+
+    setUpAll(() async {
+      io.HttpOverrides.global = null; // client HTTP vero verso il server locale di prova
+      server = await io.HttpServer.bind(io.InternetAddress.loopbackIPv4, 0);
+      server.listen((request) {
+        final body = routes[request.uri.path];
+        if (body is int) {
+          request.response.statusCode = body;
+        } else if (body is String) {
+          request.response.add(utf8.encode(body));
+        }
+        request.response.close();
+      });
+    });
+
+    tearDownAll(() async {
+      await server.close(force: true);
+    });
+
+    String at(String path) => 'http://127.0.0.1:${server.port}$path';
+
+    test('vale solo una risposta 200 con il JSON del feed: HTML parcheggiato, JSON rotto o errore → base successiva', () async {
+      routes['/ok'] = '{"version":"0.1.24","versionCode":24,"url":"https://store-k.download/get/plus.apk"}';
+      routes['/parcheggiato'] = '<!DOCTYPE html><html><body>Questo dominio è in vendita</body></html>';
+      routes['/rotto'] = '{"version":';
+      routes['/campi'] = '{"version":"0.1.24"}';
+      routes['/errore'] = 502;
+      expect(parseFeed(await fetchFeedJson(Uri.parse(at('/ok'))))?.code, 24);
+      await expectLater(fetchFeedJson(Uri.parse(at('/parcheggiato'))), throwsA(isA<FormatException>()));
+      await expectLater(fetchFeedJson(Uri.parse(at('/rotto'))), throwsA(isA<FormatException>()));
+      expect(parseFeed(await fetchFeedJson(Uri.parse(at('/campi')))), isNull);
+      expect(await fetchFeedJson(Uri.parse(at('/errore'))), isNull);
+      final u = await firstFeed([at('/parcheggiato'), at('/rotto'), at('/campi'), at('/errore'), at('/ok')], fetchFeedJson);
+      expect(u?.url, 'https://store-k.download/get/plus.apk');
+    });
+
+    test('indirizzo che non risponde (connessione rifiutata): si passa subito al successivo', () async {
+      routes['/ok'] = '{"version":"0.1.24","versionCode":24,"url":"https://panel-kairos.com/get/plus.apk"}';
+      final closed = await io.ServerSocket.bind(io.InternetAddress.loopbackIPv4, 0);
+      final port = closed.port;
+      await closed.close();
+      final watch = Stopwatch()..start();
+      final u = await firstFeed(['http://127.0.0.1:$port/get/plus.json', at('/ok')], fetchFeedJson);
+      expect(u?.code, 24);
+      expect(watch.elapsed, lessThan(const Duration(seconds: 5)));
     });
   });
 
