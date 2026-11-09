@@ -1,0 +1,40 @@
+name: Prove del ramo riquadro-qualita
+
+# Controllo del codice, test e una compilazione di prova sul ramo di lavoro. L'APK di prova (debug, firma di anteprima)
+# serve solo a vedere che la parte nativa del lettore compili e poi si butta: niente firma vera, niente artefatti,
+# niente release. Prima dell'unione in main si può cancellare (su main non parte comunque).
+on:
+  push:
+    branches: [riquadro-qualita]
+
+permissions:
+  contents: read
+
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.9'
+          channel: stable
+          cache: true
+
+      - name: Dipendenze
+        run: flutter pub get
+
+      - name: Controllo del codice
+        run: flutter analyze --no-fatal-infos
+
+      - name: Test
+        run: flutter test
+
+      - name: Compilazione di prova (parte nativa del lettore)
+        run: flutter build apk --debug --target-platform android-arm64
