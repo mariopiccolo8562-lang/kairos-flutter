@@ -19,6 +19,15 @@ Regola comune a tutte le app Kairos (Controllo remoto, chiave `adult`):
 - Negli elenchi (Film, Serie TV, TV in diretta) le categorie per adulti vanno in fondo, come quelle di `home.hide`, e restano raggiungibili; ricerca, guida, zapping e PIN del controllo genitori non cambiano.
 - `adult` = `"on"`: tutto come prima, vale solo `home.hide`.
 
+## Riquadro della qualità nel lettore
+
+Regola comune a tutte le app Kairos (Controllo remoto, chiave `qbox`), per il riquadro in alto a destra dei canali in diretta («FHD · 1080p · 50 fps»: ~6 s all'apertura del canale, ~4 s a ogni cambio di risoluzione e sempre con la barra informazioni):
+
+- `qbox` = `"off"`: il riquadro non compare mai, come con il permesso «risoluzione e FPS» (`resInd`) bloccato.
+- `qbox` = `"noq"`: il riquadro resta senza la sigla di qualità: «1080p · 50 fps».
+- `"full"`, vuota, assente o qualsiasi altro valore: come prima.
+- Il permesso `resInd` bloccato lo nasconde sempre. Flutter combina permesso e voce (`qualityBoxArgs` in `lib/data/quality_box.dart`, prove in `test/quality_box_test.dart`) e li passa al lettore nativo all'apertura e, se cambiano durante la visione, subito dopo: valgono dal prossimo aggiornamento del riquadro, anche cambiando canale. Nomi dei canali, avvisi, qualità adattiva e dati per il pannello non cambiano.
+
 ## Cosa c'è
 
 - Home stile Netflix: «Continua a guardare», La mia lista, novità, categorie.

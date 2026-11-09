@@ -239,4 +239,14 @@ abstract final class NativeBridge {
       // nessun lettore aperto
     }
   }
+
+  /// Riquadro della qualità cambiato dal pannello con il lettore aperto ([box]: `resInd`, `resTag`, come all'apertura):
+  /// true se il lettore aperto l'ha ricevuto.
+  static Future<bool> playerBox(Map<String, bool> box) async {
+    try {
+      return await _channel.invokeMethod<bool>('playerBox', jsonEncode(box)) ?? false;
+    } on Object {
+      return false; // nessun lettore aperto
+    }
+  }
 }

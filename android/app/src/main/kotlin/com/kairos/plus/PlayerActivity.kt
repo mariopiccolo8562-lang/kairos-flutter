@@ -68,6 +68,22 @@ class PlayerActivity : Activity() {
             }
         }
 
+        /**
+         * riquadro della qualità cambiato dal pannello con il lettore aperto ([data]: resInd e resTag da Flutter, come
+         * all'apertura): vale dal prossimo aggiornamento del riquadro, anche al canale dopo; false = nessun lettore aperto
+         */
+        fun boxCurrent(data: String): Boolean {
+            val a = current ?: return false
+            if (a.isFinishing) return false
+            val j = try { JSONObject(data) } catch (_: Exception) { return false }
+            a.runOnUiThread {
+                a.resInd = j.optBoolean("resInd", true)
+                a.resTag = j.optBoolean("resTag", true)
+                a.updateRes()
+            }
+            return true
+        }
+
         private val RETRY = longArrayOf(1_000, 2_000, 4_000, 8_000)
         private val ACCENT = 0xFFA855F7.toInt()
         private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
@@ -158,8 +174,10 @@ class PlayerActivity : Activity() {
     private var fillB0 = 0L
     private var lastStatsEvent = 0L
 
-    // --- riquadro qualità · risoluzione · FPS dei canali in diretta (permesso «resInd» del pannello)
+    // --- riquadro qualità · risoluzione · FPS dei canali in diretta (permesso «resInd» e voce «qbox» del pannello,
+    // già combinati da Flutter: vedi lib/data/quality_box.dart)
     private var resInd = true
+    private var resTag = true // sigla di qualità (4K, FHD, HD, SD) nel riquadro: no con la voce «qbox» "noq"
     private var resKnown = false // primo fotogramma del canale già a schermo
     private var resHeight = 0
     private var resUntil = 0L
@@ -281,6 +299,7 @@ class PlayerActivity : Activity() {
             ua = j.optString("ua").ifEmpty { ua }
             devClass = j.optString("playerClass")
             resInd = j.optBoolean("resInd", true)
+            resTag = j.optBoolean("resTag", true)
             val a = j.optJSONArray("items") ?: JSONArray()
             val list = ArrayList<Item>()
             for (i in 0 until a.length()) {
@@ -1053,20 +1072,22 @@ class PlayerActivity : Activity() {
         resV.visibility = View.VISIBLE
     }
 
-    /** es. «FHD · 1080p · 50 fps» (FPS omessi se il formato non li dice) */
+    /** es. «FHD · 1080p · 50 fps», con la voce «qbox» "noq" «1080p · 50 fps» (FPS omessi se il formato non li dice) */
     private fun resLabel(): String {
         val p = player ?: return ""
         val f = p.videoFormat
         val hgt = p.videoSize.height.takeIf { it > 0 } ?: f?.height?.takeIf { it > 0 } ?: resHeight
         if (hgt <= 0) return ""
         val q = when {
+            !resTag -> ""
             hgt >= 2000 -> "4K"
             hgt >= 1000 -> "FHD"
             hgt >= 700 -> "HD"
             else -> "SD"
         }
         val fps = f?.frameRate ?: -1f
-        return if (fps > 0f) "$q · ${hgt}p · ${Math.round(fps)} fps" else "$q · ${hgt}p"
+        // le parti vuote si saltano: mai « · » doppi, all'inizio o alla fine
+        return listOf(q, "${hgt}p", if (fps > 0f) "${Math.round(fps)} fps" else "").filter { it.isNotEmpty() }.joinToString(" · ")
     }
 
     private fun updateTexts() {
