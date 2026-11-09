@@ -6,9 +6,15 @@ abstract final class Brand {
   static const String appName = 'Kairos Plus';
   static const String shortName = 'Kairos';
 
-  /// Feed della release più recente (versione, numero e link dell'APK): lo legge l'app per aggiornarsi
-  /// e lo legge il pannello Kairos per sapere qual è l'ultima versione.
-  static const String updateFeed = 'https://github.com/mariopiccolo8562-lang/kairos-flutter/releases/latest/download/kairos-plus.json';
+  /// Indirizzo dei download (feed degli aggiornamenti e APK): l'unico da cambiare quando arriva il dominio dedicato
+  /// ai download. L'app chiede `<dlBase>/get/plus.json`, poi panel-kairos.com (saltato se è lo stesso indirizzo),
+  /// poi [updateFeedFallback]; l'APK si scarica dal campo `url` del feed trovato (vedi updateFeeds in app_updater.dart).
+  static const String dlBase = 'https://panel-kairos.com';
+
+  /// Riserva degli aggiornamenti, solo se il pannello non risponde: feed della release più recente su GitHub
+  /// (versione, numero e link dell'APK). Quando il repository diventerà privato fallirà senza danni.
+  static const String updateFeedFallback =
+      'https://github.com/mariopiccolo8562-lang/kairos-flutter/releases/latest/download/kairos-plus.json';
 
   /// Viola Kairos Plus (le altre app Kairos usano rosso, blu, arancio e ambra).
   static const Color accent = Color(0xFFA855F7);

@@ -16,15 +16,71 @@ class UpdateInfo {
   final String url;
 }
 
+/// Pannello Kairos: secondo tentativo per il feed, con gli stessi percorsi `/get/<id>.json` dell'indirizzo dei download.
+const String kPanelBase = 'https://panel-kairos.com';
+
+/// Feed degli aggiornamenti da provare, in ordine e senza doppioni (solo https):
+/// 1. `<dlBase>/get/<id>.json`, l'indirizzo dei download (Brand.dlBase, oggi il pannello);
+/// 2. il pannello [kPanelBase], stesso percorso: si salta se è lo stesso indirizzo del primo (oggi lo è);
+/// 3. [fallback], la riserva di oggi su GitHub: quando il repository diventerà privato fallirà senza danni.
+List<String> updateFeeds(String dlBase, String id, String fallback) {
+  final out = <String>[];
+  for (final base in [dlBase, kPanelBase]) {
+    var b = base.trim();
+    while (b.endsWith('/')) {
+      b = b.substring(0, b.length - 1);
+    }
+    final u = '$b/get/$id.json';
+    if (b.startsWith('https://') && !out.contains(u)) out.add(u);
+  }
+  final f = fallback.trim();
+  if (f.startsWith('https://') && !out.contains(f)) out.add(f);
+  return out;
+}
+
+/// Versione descritta da un feed (version, versionCode, url): null se il JSON non è valido
+/// (versione non riconosciuta o APK non in https).
+UpdateInfo? parseFeed(Object? raw) {
+  final m = asMap(raw);
+  final version = (asString(m['version']) ?? '').replaceFirst(RegExp(r'^v'), '');
+  final code = asInt(m['versionCode']) ?? _semverCode(version);
+  final url = asString(m['url']) ?? '';
+  if (code <= 0 || !url.startsWith('https://')) return null;
+  return UpdateInfo(code: code, version: version, url: url);
+}
+
+/// Primo feed valido nell'ordine di [feeds]: si passa al successivo solo se quello prima non risponde, risponde con
+/// un errore o con un JSON non valido, così con il pannello che funziona la richiesta resta una sola.
+/// null = nessuno ha risposto bene (come una rete giù: si riprova più tardi).
+Future<UpdateInfo?> firstFeed(List<String> feeds, Future<Object?> Function(Uri uri) fetch) async {
+  for (final f in feeds) {
+    try {
+      final u = parseFeed(await fetch(Uri.parse(f)));
+      if (u != null) return u;
+    } on Object {
+      // nessuna risposta, errore HTTP o risposta illeggibile: si prova il feed successivo
+    }
+  }
+  return null;
+}
+
+int _semverCode(String v) {
+  final m = RegExp(r'^(\d{1,3})\.(\d{1,2})\.(\d{1,3})$').firstMatch(v);
+  if (m == null) return 0;
+  return int.parse(m[1]!) * 10000 + int.parse(m[2]!) * 100 + int.parse(m[3]!);
+}
+
 /// Aggiornamento dell'app (Kairos Plus).
-/// - Il feed kairos-plus.json della release più recente dice qual è l'ultima versione.
+/// - Il feed dice qual è l'ultima versione e da dove si scarica l'APK: prima quello del pannello
+///   (`/get/plus.json`, vedi [updateFeeds]), poi, solo se il pannello non risponde, kairos-plus.json della release
+///   più recente su GitHub.
 /// - Aggiornamento in background (scelta del cliente o imposta dal pannello, acceso di serie): l'APK si scarica
 ///   e si verifica in silenzio (solo su Wi-Fi o cavo, mai durante la visione); quando è pronto si propone
 ///   «Installa ora» e al cliente resta solo la conferma di Android.
 /// - Dal pannello: «Invia aggiornamento» (upd nel battito) o il comando «update» fanno partire subito il controllo.
 class AppUpdater extends ChangeNotifier {
   AppUpdater({
-    required this.feedUrl,
+    required this.feedUrls,
     required this.currentCode,
     required this.currentVersion,
     required this.backgroundEnabled,
@@ -34,11 +90,17 @@ class AppUpdater extends ChangeNotifier {
     required this.saveFirstSeen,
     required this.loadPending,
     required this.savePending,
+    this.fetchFeed,
   }) {
     _sub = NativeBridge.updateEvents.listen(_onEvent);
   }
 
-  final String feedUrl;
+  /// Feed da provare in ordine ([updateFeeds]): pannello prima, GitHub di riserva.
+  final List<String> feedUrls;
+
+  /// Lettura di un feed (le prove la sostituiscono); null = rete, al massimo 15 secondi per tentativo.
+  final Future<Object?> Function(Uri uri)? fetchFeed;
+
   final int currentCode;
   final String currentVersion;
 
@@ -221,20 +283,18 @@ class AppUpdater extends ChangeNotifier {
     if (_checking || currentCode <= 0) return pending;
     _checking = true;
     try {
-      Object? raw;
-      try {
-        raw = await net.fetchJson(Uri.parse(feedUrl), timeout: const Duration(seconds: 15));
-      } on Object {
+      // pannello prima; GitHub solo se il pannello non risponde, risponde con un errore o con un JSON non valido
+      final found = await firstFeed(feedUrls, fetchFeed ?? _fetchFeed);
+      if (found == null) {
         if (manual) message = 'Impossibile controllare gli aggiornamenti adesso';
         notifyListeners();
         return pending;
       }
       _lastCheck = DateTime.now();
-      final m = asMap(raw);
-      final version = (asString(m['version']) ?? '').replaceFirst(RegExp(r'^v'), '');
-      final code = asInt(m['versionCode']) ?? _semverCode(version);
-      final url = asString(m['url']) ?? '';
-      if (code <= currentCode || !url.startsWith('https://')) {
+      final version = found.version;
+      final code = found.code;
+      final url = found.url; // l'APK si scarica da qui (dal pannello, se il feed è il suo)
+      if (code <= currentCode) {
         pending = null;
         ready = false;
         unawaited(savePending(''));
@@ -326,11 +386,7 @@ class AppUpdater extends ChangeNotifier {
     notifyListeners();
   }
 
-  static int _semverCode(String v) {
-    final m = RegExp(r'^(\d{1,3})\.(\d{1,2})\.(\d{1,3})$').firstMatch(v);
-    if (m == null) return 0;
-    return int.parse(m[1]!) * 10000 + int.parse(m[2]!) * 100 + int.parse(m[3]!);
-  }
+  static Future<Object?> _fetchFeed(Uri uri) => net.fetchJson(uri, timeout: const Duration(seconds: 15));
 
   @override
   void dispose() {

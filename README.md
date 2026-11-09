@@ -48,6 +48,8 @@ Ogni modifica su `main` compila l'APK e pubblica la release `v0.1.N` con:
   `https://github.com/mariopiccolo8562-lang/kairos-flutter/releases/latest/download/kairos-plus.apk`
 - `kairos-plus.json` — versione per il pannello.
 
+L'app chiede gli aggiornamenti al pannello, `https://panel-kairos.com/get/plus.json` (indirizzo dei download `Brand.dlBase` in `lib/app/brand.dart`), e scarica l'APK dal link che c'è dentro; solo se il pannello non risponde legge `kairos-plus.json` dell'ultima release (riserva finché il repository è pubblico).
+
 ### Firma
 
 Senza segreti l'APK è firmato con la chiave **di anteprima** del repository (pubblica). Per la distribuzione ai clienti crea in *Settings → Secrets and variables → Actions* i segreti `ANDROID_KEYSTORE_B64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` (anche gli stessi di Kairos Lite / Kairos TV). Cambiare chiave richiede di disinstallare e reinstallare l'app una volta: va fatto prima di darla ai clienti.

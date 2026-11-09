@@ -504,7 +504,7 @@ void main() {
     const saved = '{"code":21,"version":"0.1.21","url":"https://example.org/kairos-plus.apk"}';
 
     AppUpdater updater({String pending = saved, String first = '21:0', int? days = 0, bool Function()? watching}) => AppUpdater(
-          feedUrl: 'https://example.org/kairos-plus.json',
+          feedUrls: const ['https://example.org/kairos-plus.json'],
           currentCode: 20,
           currentVersion: '0.1.20',
           backgroundEnabled: () => true,
@@ -562,6 +562,109 @@ void main() {
       expect(notReady.mustUpdate, isFalse);
       expect(notReady.offer.value, isNull);
       notReady.dispose();
+    });
+
+    const github = 'https://github.com/mariopiccolo8562-lang/kairos-flutter/releases/latest/download/kairos-plus.json';
+    const panelFeed = 'https://panel-kairos.com/get/plus.json';
+
+    test('feed: prima il pannello, GitHub solo di riserva; un dominio dei download nuovo viene prima del pannello', () {
+      // oggi l'indirizzo dei download è il pannello: il secondo tentativo, uguale al primo, si salta
+      expect(updateFeeds('https://panel-kairos.com', 'plus', github), [panelFeed, github]);
+      expect(updateFeeds('https://panel-kairos.com/', 'plus', github), [panelFeed, github]);
+      expect(updateFeeds('https://dl.example.com/', 'plus', github), ['https://dl.example.com/get/plus.json', panelFeed, github]);
+      expect(updateFeeds('', 'plus', ''), [panelFeed]);
+      expect(updateFeeds('http://dl.example.com', 'plus', github), [panelFeed, github]);
+    });
+
+    test('feed: con il pannello che risponde GitHub non si chiede e l\'APK arriva dal pannello', () async {
+      final asked = <String>[];
+      final u = await firstFeed(updateFeeds('https://panel-kairos.com', 'plus', github), (uri) async {
+        asked.add('$uri');
+        return <String, Object?>{'version': '0.1.24', 'versionCode': 24, 'url': 'https://panel-kairos.com/get/plus.apk'};
+      });
+      expect(u?.code, 24);
+      expect(u?.url, 'https://panel-kairos.com/get/plus.apk');
+      expect(asked, [panelFeed]); // nessun controllo in più del solito
+    });
+
+    test('feed: pannello muto, con errore o con un JSON non valido → riserva GitHub', () async {
+      final failures = <Future<Object?> Function()>[
+        () async => throw const net.SourceException('Server non raggiungibile: controlla la connessione'),
+        () async => throw const net.SourceException('Il server ha risposto con errore 502'),
+        () async => <String, Object?>{'error': 'non disponibile'},
+        () async => null, // risposta vuota
+        () async => <String, Object?>{'version': '0.1.24', 'versionCode': 24, 'url': 'http://panel-kairos.com/get/plus.apk'},
+      ];
+      for (final fail in failures) {
+        final asked = <String>[];
+        final u = await firstFeed(updateFeeds('https://panel-kairos.com', 'plus', github), (uri) async {
+          asked.add('$uri');
+          if ('$uri' == github) {
+            return <String, Object?>{'version': 'v0.1.24', 'versionCode': '24', 'url': 'https://github.com/x/kairos-plus.apk'};
+          }
+          return fail();
+        });
+        expect(u?.code, 24);
+        expect(u?.version, '0.1.24');
+        expect(u?.url, 'https://github.com/x/kairos-plus.apk');
+        expect(asked, [panelFeed, github]);
+      }
+    });
+
+    test('feed: nessuno risponde (anche GitHub con il repository privato) → nessuna versione, come una rete giù', () async {
+      final u = await firstFeed(updateFeeds('https://panel-kairos.com', 'plus', github), (_) async {
+        throw const net.SourceException('Il server ha risposto con errore 404');
+      });
+      expect(u, isNull);
+    });
+
+    test('controllo: pannello giù, la versione nuova arriva dalla riserva e si scarica dal link del feed', () async {
+      status = <String, Object?>{'ready': false, 'canInstall': true, 'metered': false};
+      final asked = <String>[];
+      final u = AppUpdater(
+        feedUrls: const [panelFeed, github],
+        fetchFeed: (uri) async {
+          asked.add('$uri');
+          if (uri.host == 'panel-kairos.com') throw const net.SourceException('Il server ha risposto con errore 502');
+          return <String, Object?>{'version': '0.1.21', 'versionCode': 21, 'url': 'https://github.com/x/kairos-plus.apk'};
+        },
+        currentCode: 20,
+        currentVersion: '0.1.20',
+        backgroundEnabled: () => true,
+        forceDays: () => null,
+        watching: () => false,
+        loadFirstSeen: () async => '',
+        saveFirstSeen: (_) async {},
+        loadPending: () async => '',
+        savePending: (_) async {},
+      );
+      final found = await u.check();
+      expect(found?.code, 21);
+      expect(u.pending?.url, 'https://github.com/x/kairos-plus.apk');
+      expect(asked, [panelFeed, github]);
+      expect(calls, ['updateStatus', 'updatePrefetch']);
+      u.dispose();
+    });
+
+    test('controllo: feed non valido ovunque → la versione trovata prima resta, niente «già aggiornata»', () async {
+      final v = AppUpdater(
+        feedUrls: const [panelFeed, github],
+        fetchFeed: (_) async => <String, Object?>{},
+        currentCode: 20,
+        currentVersion: '0.1.20',
+        backgroundEnabled: () => true,
+        forceDays: () => null,
+        watching: () => false,
+        loadFirstSeen: () async => '',
+        saveFirstSeen: (_) async {},
+        loadPending: () async => saved,
+        savePending: (_) async {},
+      );
+      await v.restore();
+      expect(await v.check(manual: true), isNotNull);
+      expect(v.pending?.code, 21);
+      expect(v.message, 'Impossibile controllare gli aggiornamenti adesso');
+      v.dispose();
     });
 
     test('senza il permesso «Installa app sconosciute»: lo dice e al ritorno l\'installazione riparte', () async {
