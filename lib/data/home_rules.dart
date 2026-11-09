@@ -72,15 +72,27 @@ String adultNormalize(String value) {
 // sarebbe il carattere di backspace). Si provano sul nome già normalizzato, quindi senza maiuscole.
 final RegExp _adultCategory = RegExp(
     r'(\bxxx\b|adult|\bporn|erotic|erotik|erotis|erotiq|hentai|\b18\s*\+|\+\s*18\b|\bv\.?\s*m\.?\s*18\b|\bsexy?\b|\bhot\s*club\b|playboy|brazzers|hustler|dorcel|only\s*fans|red\s*light|\bx[\s-]?rated\b|\bnsfw\b|\bmilf\b|private\s*tv|vietato ai minori)');
-final RegExp _adultTitle =
-    RegExp(r'(\bxxx\b|\bporn|hentai|brazzers|playboy\s*tv|hustler\s*tv|dorcel|only\s*fans|\b18\s*\+|\+\s*18\b)');
+const String _adultTitlePattern =
+    r'(\bxxx\b|\bporn|hentai|brazzers|playboy\s*tv|hustler\s*tv|dorcel|only\s*fans|\b18\s*\+|\+\s*18\b)';
+final RegExp _adultTitle = RegExp(_adultTitlePattern);
+// La stessa senza maiuscole, per i nomi tutti ASCII: lì normalizzare vuol dire solo passare in minuscolo (gli spazi
+// multipli e ai bordi non cambiano l'esito), quindi stesso risultato senza creare testi nuovi per ogni titolo.
+final RegExp _adultTitleAscii = RegExp(_adultTitlePattern, caseSensitive: false);
 final RegExp _adultSwim = RegExp(r'adult\s*swim');
+
+bool _ascii(String s) {
+  for (var i = 0; i < s.length; i++) {
+    if (s.codeUnitAt(i) > 0x7F) return false;
+  }
+  return true;
+}
 
 /// Categoria per adulti: il nome normalizzato, tolto «adult swim», contiene una parola per adulti.
 bool adultCat(String name) => _adultCategory.hasMatch(adultNormalize(name).replaceAll(_adultSwim, ''));
 
 /// Titolo o canale per adulti: solo le parole forti (un film come «Sex Education» resta dov'è).
-bool adultTitle(String name) => _adultTitle.hasMatch(adultNormalize(name));
+bool adultTitle(String name) =>
+    _ascii(name) ? _adultTitleAscii.hasMatch(name) : _adultTitle.hasMatch(adultNormalize(name));
 
 /// Esito di [adultTitle] per ogni elemento, calcolato una volta sola (l'elemento non cambia mai nome).
 final Expando<bool> _strongTitle = Expando<bool>('titolo per adulti');
