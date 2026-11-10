@@ -508,7 +508,7 @@ void main() {
     const saved = '{"code":21,"version":"0.1.21","url":"https://example.org/kairos-plus.apk"}';
 
     AppUpdater updater({String pending = saved, String first = '21:0', int? days = 0, bool Function()? watching}) => AppUpdater(
-          feedUrls: const ['https://example.org/kairos-plus.json'],
+          feedUrls: () => const ['https://example.org/kairos-plus.json'],
           currentCode: 20,
           currentVersion: '0.1.20',
           backgroundEnabled: () => true,
@@ -568,172 +568,210 @@ void main() {
       notReady.dispose();
     });
 
-    const github = 'https://github.com/mariopiccolo8562-lang/kairos-flutter/releases/latest/download/kairos-plus.json';
-    const ghApk = 'https://github.com/mariopiccolo8562-lang/kairos-flutter/releases/latest/download/kairos-plus.apk';
     const dlFeed = 'https://store-k.download/get/plus.json';
-    const panelFeed = 'https://panel-kairos.com/get/plus.json';
     const dlApk = 'https://store-k.download/get/plus.apk';
-    const panelApk = 'https://panel-kairos.com/get/plus.apk';
+    const res = 'https://riserva-k.download';
+    const res2 = 'https://riserva2-k.download';
+    const resFeed = '$res/get/plus.json';
+    const resApk = '$res/get/plus.apk';
+    const res2Apk = '$res2/get/plus.apk';
 
-    test('feed: store-k.download, poi il pannello, poi GitHub (come nell\'app)', () {
+    AppUpdater checker({
+      required List<String> Function() feeds,
+      required Future<Object?> Function(Uri uri) fetch,
+      List<String> Function(String url)? apks,
+      void Function(List<String>)? keep,
+      String pending = '',
+    }) =>
+        AppUpdater(
+          feedUrls: feeds,
+          fetchFeed: fetch,
+          apkUrlsFor: apks,
+          saveMirrors: keep,
+          currentCode: 20,
+          currentVersion: '0.1.20',
+          backgroundEnabled: () => true,
+          forceDays: () => null,
+          watching: () => false,
+          loadFirstSeen: () async => '',
+          saveFirstSeen: (_) async {},
+          loadPending: () async => pending,
+          savePending: (_) async {},
+        );
+
+    test('feed: il dominio dei download, poi le riserve; niente pannello né GitHub', () {
       expect(Brand.dlBase, 'https://store-k.download');
-      expect(updateFeeds(Brand.dlBase, 'plus', Brand.updateFeedFallback), [dlFeed, panelFeed, github]);
-      expect(updateFeeds('https://store-k.download/', 'plus', github), [dlFeed, panelFeed, github]);
-      // con il pannello come indirizzo dei download il doppione si salta
-      expect(updateFeeds('https://panel-kairos.com', 'plus', github), [panelFeed, github]);
-      expect(updateFeeds('', 'plus', ''), [panelFeed]);
-      expect(updateFeeds('http://store-k.download', 'plus', github), [panelFeed, github]);
+      expect(updateFeeds(Brand.dlBase, 'plus'), [dlFeed]);
+      expect(updateFeeds('https://store-k.download/', 'plus'), [dlFeed]);
+      // riserva compilata vuota, doppioni e barre finali si saltano
+      expect(updateFeeds(Brand.dlBase, 'plus', ['', '$res/', 'https://store-k.download']), [dlFeed, resFeed]);
+      // solo https e solo il dominio: http, percorsi e indirizzi senza schema si scartano
+      expect(updateFeeds('http://store-k.download', 'plus', ['$res/x', 'riserva-k.download', res2]), ['$res2/get/plus.json']);
+      expect(updateFeeds('', 'plus'), isEmpty);
+      // al massimo 4 basi
+      expect(downloadBases(Brand.dlBase, ['https://a-k.download', 'https://b-k.download', 'https://c-k.download', 'https://d-k.download']),
+          ['https://store-k.download', 'https://a-k.download', 'https://b-k.download', 'https://c-k.download']);
+      final all = updateFeeds(Brand.dlBase, 'plus', [Brand.dlBase2, res]).join(' ');
+      expect(all, isNot(contains('panel-kairos.com')));
+      expect(all, isNot(contains('github.com')));
     });
 
-    test('APK: link del feed, poi le basi successive, alla fine GitHub', () {
-      expect(apkUrls(dlApk, Brand.dlBase, 'plus', Brand.apkFallback), [dlApk, panelApk, ghApk]);
-      // feed dal pannello (dominio dei download giù): il dominio dei download non si riprova
-      expect(apkUrls(panelApk, Brand.dlBase, 'plus', ghApk), [panelApk, ghApk]);
-      // feed di riserva di GitHub: il suo link, poi l'ultima release
-      const rel = 'https://github.com/mariopiccolo8562-lang/kairos-flutter/releases/download/v0.1.24/kairos-plus.apk';
-      expect(apkUrls(rel, Brand.dlBase, 'plus', ghApk), [rel, ghApk]);
-      expect(apkUrls(ghApk, Brand.dlBase, 'plus', ghApk), [ghApk]);
+    test('APK: link del feed, poi le basi successive; un link fuori dalle basi passa a tutte', () {
+      const extra = [res, res2];
+      expect(apkUrls(dlApk, Brand.dlBase, 'plus'), [dlApk]);
+      expect(apkUrls(dlApk, Brand.dlBase, 'plus', extra), [dlApk, resApk, res2Apk]);
+      // feed dalla riserva (dominio dei download giù): il dominio dei download non si riprova
+      expect(apkUrls(resApk, Brand.dlBase, 'plus', extra), [resApk, res2Apk]);
+      // link fuori dalle basi: il suo link, poi tutte le basi
+      const other = 'https://cdn.example.org/kairos-plus.apk';
+      expect(apkUrls(other, Brand.dlBase, 'plus', extra), [other, dlApk, resApk, res2Apk]);
+      expect(apkUrls('http://store-k.download/get/plus.apk', Brand.dlBase, 'plus'), [dlApk]);
     });
 
-    test('feed: dominio dei download non attivo o parcheggiato → il pannello, GitHub non si chiede', () async {
+    test('«mirrors» del feed: solo https validi, senza doppioni, al massimo 3; senza lista restano quelli ricordati', () {
+      expect(
+        feedMirrors(<String, Object?>{
+          'mirrors': [Brand.dlBase, '$res/', 'http://x-k.download', res, 5, 'https://a-k.download', 'https://b-k.download'],
+        }),
+        [Brand.dlBase, res, 'https://a-k.download'],
+      );
+      expect(feedMirrors(<String, Object?>{'mirrors': <Object?>[]}), isEmpty);
+      expect(feedMirrors(<String, Object?>{'version': '0.1.24'}), isNull);
+      expect(feedMirrors(<String, Object?>{'mirrors': res}), isNull);
+      expect(parseFeed(<String, Object?>{'version': '0.1.24', 'versionCode': 24, 'url': dlApk, 'mirrors': [res]})?.mirrors, [res]);
+      expect(parseFeed(<String, Object?>{'version': '0.1.24', 'versionCode': 24, 'url': dlApk})?.mirrors, isNull);
+    });
+
+    test('feed: dominio dei download non attivo, parcheggiato o con un JSON non valido → la riserva', () async {
       final failures = <Future<Object?> Function()>[
         () async => throw const io.SocketException('Failed host lookup: store-k.download'),
         () async => throw const FormatException('<!DOCTYPE html>'), // pagina parcheggiata
+        () async => throw const net.SourceException('Il server ha risposto con errore 502'),
         () async => null, // risposta diversa da 200
+        () async => <String, Object?>{'error': 'non disponibile'},
+        () async => <String, Object?>{'version': '0.1.24', 'versionCode': 24, 'url': 'http://store-k.download/get/plus.apk'},
       ];
       for (final fail in failures) {
         final asked = <String>[];
-        final u = await firstFeed(updateFeeds(Brand.dlBase, 'plus', github), (uri) async {
+        final u = await firstFeed(updateFeeds(Brand.dlBase, 'plus', [res]), (uri) async {
           asked.add('$uri');
-          if ('$uri' == panelFeed) return <String, Object?>{'version': '0.1.24', 'versionCode': 24, 'url': panelApk};
+          if ('$uri' == resFeed) return <String, Object?>{'version': '0.1.24', 'versionCode': 24, 'url': resApk};
           return fail();
         });
-        expect(u?.url, panelApk);
-        expect(asked, [dlFeed, panelFeed]);
+        expect(u?.url, resApk);
+        expect(asked, [dlFeed, resFeed]);
       }
     });
 
-    test('feed: con il pannello che risponde GitHub non si chiede e l\'APK arriva dal pannello', () async {
+    test('feed: con il dominio dei download che risponde le riserve non si chiedono', () async {
       final asked = <String>[];
-      final u = await firstFeed(updateFeeds('https://panel-kairos.com', 'plus', github), (uri) async {
+      final u = await firstFeed(updateFeeds(Brand.dlBase, 'plus', [res]), (uri) async {
         asked.add('$uri');
-        return <String, Object?>{'version': '0.1.24', 'versionCode': 24, 'url': 'https://panel-kairos.com/get/plus.apk'};
+        return <String, Object?>{'version': '0.1.24', 'versionCode': 24, 'url': dlApk};
       });
       expect(u?.code, 24);
-      expect(u?.url, 'https://panel-kairos.com/get/plus.apk');
-      expect(asked, [panelFeed]); // nessun controllo in più del solito
+      expect(u?.url, dlApk);
+      expect(asked, [dlFeed]); // nessun controllo in più del solito
     });
 
-    test('feed: pannello muto, con errore o con un JSON non valido → riserva GitHub', () async {
-      final failures = <Future<Object?> Function()>[
-        () async => throw const net.SourceException('Server non raggiungibile: controlla la connessione'),
-        () async => throw const net.SourceException('Il server ha risposto con errore 502'),
-        () async => <String, Object?>{'error': 'non disponibile'},
-        () async => null, // risposta vuota
-        () async => <String, Object?>{'version': '0.1.24', 'versionCode': 24, 'url': 'http://panel-kairos.com/get/plus.apk'},
-      ];
-      for (final fail in failures) {
-        final asked = <String>[];
-        final u = await firstFeed(updateFeeds('https://panel-kairos.com', 'plus', github), (uri) async {
-          asked.add('$uri');
-          if ('$uri' == github) {
-            return <String, Object?>{'version': 'v0.1.24', 'versionCode': '24', 'url': 'https://github.com/x/kairos-plus.apk'};
-          }
-          return fail();
-        });
-        expect(u?.code, 24);
-        expect(u?.version, '0.1.24');
-        expect(u?.url, 'https://github.com/x/kairos-plus.apk');
-        expect(asked, [panelFeed, github]);
-      }
-    });
-
-    test('feed: nessuno risponde (anche GitHub con il repository privato) → nessuna versione, come una rete giù', () async {
-      final u = await firstFeed(updateFeeds('https://panel-kairos.com', 'plus', github), (_) async {
+    test('feed: nessuno risponde → nessuna versione, come una rete giù', () async {
+      final u = await firstFeed(updateFeeds(Brand.dlBase, 'plus', [res]), (_) async {
         throw const net.SourceException('Il server ha risposto con errore 404');
       });
       expect(u, isNull);
     });
 
-    test('controllo: dominio dei download giù, versione dal pannello; la parte nativa riceve le riserve dell\'APK', () async {
+    test('controllo: dominio dei download giù, versione dalla riserva; la parte nativa riceve le basi successive', () async {
       status = <String, Object?>{'ready': false, 'canInstall': true, 'metered': false};
+      const extra = [res, res2];
       final asked = <String>[];
-      final u = AppUpdater(
-        feedUrls: updateFeeds(Brand.dlBase, 'plus', github),
-        fetchFeed: (uri) async {
+      final u = checker(
+        feeds: () => updateFeeds(Brand.dlBase, 'plus', extra),
+        fetch: (uri) async {
           asked.add('$uri');
           if (uri.host == 'store-k.download') throw const io.SocketException('Failed host lookup: store-k.download');
-          return <String, Object?>{'version': '0.1.21', 'versionCode': 21, 'url': panelApk};
+          return <String, Object?>{'version': '0.1.21', 'versionCode': 21, 'url': resApk};
         },
-        apkUrlsFor: (url) => apkUrls(url, Brand.dlBase, 'plus', ghApk),
-        currentCode: 20,
-        currentVersion: '0.1.20',
-        backgroundEnabled: () => true,
-        forceDays: () => null,
-        watching: () => false,
-        loadFirstSeen: () async => '',
-        saveFirstSeen: (_) async {},
-        loadPending: () async => '',
-        savePending: (_) async {},
+        apks: (url) => apkUrls(url, Brand.dlBase, 'plus', extra),
       );
       final found = await u.check();
-      expect(found?.url, panelApk);
-      expect(asked, [dlFeed, panelFeed]);
+      expect(found?.url, resApk);
+      expect(asked, [dlFeed, resFeed]);
       expect(args['updatePrefetch'], {
-        'url': panelApk,
+        'url': resApk,
         'code': 21,
-        'alts': [ghApk],
+        'alts': [res2Apk],
       });
       await u.install();
       expect(args['updateInstall'], {
-        'url': panelApk,
+        'url': resApk,
         'code': 21,
-        'alts': [ghApk],
+        'alts': [res2Apk],
       });
       u.dispose();
     });
 
-    test('controllo: pannello giù, la versione nuova arriva dalla riserva e si scarica dal link del feed', () async {
+    test('controllo: senza riserve il feed è uno solo e l\'APK si scarica solo dal suo link', () async {
       status = <String, Object?>{'ready': false, 'canInstall': true, 'metered': false};
       final asked = <String>[];
-      final u = AppUpdater(
-        feedUrls: const [panelFeed, github],
-        fetchFeed: (uri) async {
+      final u = checker(
+        feeds: () => updateFeeds(Brand.dlBase, 'plus', const ['']),
+        fetch: (uri) async {
           asked.add('$uri');
-          if (uri.host == 'panel-kairos.com') throw const net.SourceException('Il server ha risposto con errore 502');
-          return <String, Object?>{'version': '0.1.21', 'versionCode': 21, 'url': 'https://github.com/x/kairos-plus.apk'};
+          return <String, Object?>{'version': '0.1.21', 'versionCode': 21, 'url': dlApk};
         },
-        currentCode: 20,
-        currentVersion: '0.1.20',
-        backgroundEnabled: () => true,
-        forceDays: () => null,
-        watching: () => false,
-        loadFirstSeen: () async => '',
-        saveFirstSeen: (_) async {},
-        loadPending: () async => '',
-        savePending: (_) async {},
+        apks: (url) => apkUrls(url, Brand.dlBase, 'plus', const ['']),
       );
       final found = await u.check();
       expect(found?.code, 21);
-      expect(u.pending?.url, 'https://github.com/x/kairos-plus.apk');
-      expect(asked, [panelFeed, github]);
+      expect(asked, [dlFeed]);
       expect(calls, ['updateStatus', 'updatePrefetch']);
+      expect(args['updatePrefetch'], {'url': dlApk, 'code': 21, 'alts': <String>[]});
+      u.dispose();
+    });
+
+    test('controllo: i domini di riserva annunciati dal feed si ricordano e valgono dal controllo dopo', () async {
+      var mirrors = <String>[];
+      final kept = <List<String>>[];
+      final asked = <String>[];
+      var dlDown = false;
+      final u = checker(
+        feeds: () => updateFeeds(Brand.dlBase, 'plus', mirrors),
+        fetch: (uri) async {
+          asked.add('$uri');
+          if (dlDown && uri.host == 'store-k.download') throw const io.SocketException('Failed host lookup: store-k.download');
+          return <String, Object?>{
+            'version': '0.1.21',
+            'versionCode': 21,
+            'url': 'https://${uri.host}/get/plus.apk',
+            if (uri.host == 'store-k.download') 'mirrors': [Brand.dlBase, res],
+          };
+        },
+        keep: (m) {
+          kept.add(m);
+          mirrors = m;
+        },
+      );
+      await u.check();
+      expect(asked, [dlFeed]);
+      expect(kept, [
+        [Brand.dlBase, res],
+      ]);
+      // il dominio dei download si spegne: la riserva imparata dal feed risponde
+      dlDown = true;
+      asked.clear();
+      final found = await u.check(force: true);
+      expect(asked, [dlFeed, resFeed]);
+      expect(found?.url, resApk);
+      expect(kept.length, 1); // il feed della riserva non ha la lista: quelli ricordati restano
       u.dispose();
     });
 
     test('controllo: feed non valido ovunque → la versione trovata prima resta, niente «già aggiornata»', () async {
-      final v = AppUpdater(
-        feedUrls: const [panelFeed, github],
-        fetchFeed: (_) async => <String, Object?>{},
-        currentCode: 20,
-        currentVersion: '0.1.20',
-        backgroundEnabled: () => true,
-        forceDays: () => null,
-        watching: () => false,
-        loadFirstSeen: () async => '',
-        saveFirstSeen: (_) async {},
-        loadPending: () async => saved,
-        savePending: (_) async {},
+      final v = checker(
+        feeds: () => const [dlFeed, resFeed],
+        fetch: (_) async => <String, Object?>{},
+        pending: saved,
       );
       await v.restore();
       expect(await v.check(manual: true), isNotNull);
@@ -799,7 +837,7 @@ void main() {
     });
 
     test('indirizzo che non risponde (connessione rifiutata): si passa subito al successivo', () async {
-      routes['/ok'] = '{"version":"0.1.24","versionCode":24,"url":"https://panel-kairos.com/get/plus.apk"}';
+      routes['/ok'] = '{"version":"0.1.24","versionCode":24,"url":"https://store-k.download/get/plus.apk"}';
       final closed = await io.ServerSocket.bind(io.InternetAddress.loopbackIPv4, 0);
       final port = closed.port;
       await closed.close();

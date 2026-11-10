@@ -125,9 +125,13 @@ class AppController {
   final ValueNotifier<String?> remoteCmd = ValueNotifier(null);
   /// PIN reimpostato dal pannello durante la visione: il nuovo PIN si chiede a visione finita.
   final PinAsk _pinAsk = PinAsk();
-  /// Aggiornamento dell'app (feed delle release, scaricamento in background, installazione).
+  /// Aggiornamento dell'app (feed degli aggiornamenti, scaricamento in background, installazione).
   AppUpdater? _updater;
   AppUpdater get updater => _updater!;
+  /// Domini di riserva per gli aggiornamenti annunciati dal feed («mirrors»), ricordati sul dispositivo.
+  List<String> _dlMirrors = const <String>[];
+  /// Basi di riserva dei download: quella compilata (Brand.dlBase2) e i domini annunciati dal feed.
+  List<String> get _dlExtra => [Brand.dlBase2, ..._dlMirrors];
   /// Aggiornamento in background acceso (imposto dal pannello o scelto qui).
   bool get bgUpdate => imposed('bgupd') ? _rc['bgupd'].toString() == 'on' : _bgUpdate;
   String _previewMode = 'click';
@@ -293,6 +297,7 @@ class AppController {
       _store.loadPinLater(),
       _store.loadServer(),
     ).wait;
+    final mirrorsWait = _store.loadDlMirrors().catchError((Object _) => const <String>[]);
     final userWait = (
       _store.loadFavorites(),
       _store.loadProgress(),
@@ -310,9 +315,15 @@ class AppController {
         await settingsWait;
     _bgUpdate = savedBg;
     _updSeen = savedUpdSeen;
+    _dlMirrors = await mirrorsWait;
     _updater = AppUpdater(
-      feedUrls: updateFeeds(Brand.dlBase, 'plus', Brand.updateFeedFallback),
-      apkUrlsFor: (url) => apkUrls(url, Brand.dlBase, 'plus', Brand.apkFallback),
+      feedUrls: () => updateFeeds(Brand.dlBase, 'plus', _dlExtra),
+      apkUrlsFor: (url) => apkUrls(url, Brand.dlBase, 'plus', _dlExtra),
+      saveMirrors: (m) {
+        if (m.join('\n') == _dlMirrors.join('\n')) return;
+        _dlMirrors = m;
+        unawaited(_store.saveDlMirrors(m));
+      },
       currentCode: device.versionCode,
       currentVersion: device.version,
       backgroundEnabled: () => bgUpdate,
