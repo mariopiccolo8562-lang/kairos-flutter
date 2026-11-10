@@ -61,11 +61,14 @@ jobs:
           KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS || 'kairosplus' }}
           KEY_PASS: ${{ secrets.ANDROID_KEY_PASSWORD || secrets.ANDROID_KEYSTORE_PASSWORD }}
+          # secondo dominio dei download, di riserva (variabile del repository; vuota = nessuno)
+          DL_BASE2: ${{ vars.KAIROS_DL_BASE2 }}
         run: |
           flutter build apk --release \
             --target-platform android-arm,android-arm64 \
             --build-name=0.1.${{ github.run_number }} \
-            --build-number=${{ github.run_number }}
+            --build-number=${{ github.run_number }} \
+            --dart-define=KAIROS_DL_BASE2="$DL_BASE2"
           cp build/app/outputs/flutter-apk/app-release.apk kairos-plus.apk
           ls -l kairos-plus.apk
           # con quale chiave è firmato (anteprima o definitiva)

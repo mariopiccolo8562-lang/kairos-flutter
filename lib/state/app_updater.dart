@@ -8,62 +8,78 @@ import '../core/json.dart';
 import '../core/native.dart';
 import '../core/net.dart' as net;
 
-/// Versione nuova trovata nel feed delle release.
+/// Versione nuova trovata nel feed degli aggiornamenti.
 class UpdateInfo {
-  const UpdateInfo({required this.code, required this.version, required this.url});
+  const UpdateInfo({required this.code, required this.version, required this.url, this.mirrors});
 
   final int code;
   final String version;
   final String url;
+
+  /// Domini di riserva annunciati dal feed («mirrors», vedi [feedMirrors]); null = il feed non ne parla.
+  final List<String>? mirrors;
 }
 
-/// Pannello Kairos: seconda base dei download, con gli stessi percorsi `/get/<id>.json` e `/get/<id>.apk`.
-const String kPanelBase = 'https://panel-kairos.com';
+// Da dove arrivano il feed e l'APK (dal 10 novembre 2026 niente più pannello né GitHub negli aggiornamenti):
+// 1. il dominio dei download Brand.dlBase (https://store-k.download): se non risponde si passa in fretta alla base dopo;
+// 2. le riserve, con gli stessi percorsi `/get/<id>.json` e `/get/<id>.apk`: Brand.dlBase2 (variabile KAIROS_DL_BASE2
+//    del repository, vuota finché non c'è un secondo dominio) e i domini che il feed annuncia in «mirrors» (l'app li
+//    ricorda: un dominio di riserva comprato dopo arriva anche alle app già installate, senza una versione nuova).
 
-/// Basi https dei download, in ordine e senza doppioni: [dlBase] (Brand.dlBase, il dominio dedicato ai download),
-/// poi il pannello [kPanelBase].
-List<String> downloadBases(String dlBase) {
+/// Base dei download valida: solo https e solo il dominio (porta facoltativa), senza percorso.
+final RegExp _kBase = RegExp(r'^https://[a-z0-9.-]+\.[a-z]{2,}(:\d{1,5})?$', caseSensitive: false);
+
+String _trimBase(String base) {
+  var b = base.trim();
+  while (b.endsWith('/')) {
+    b = b.substring(0, b.length - 1);
+  }
+  return b;
+}
+
+/// Basi https valide da [list], in ordine e senza doppioni, al massimo [max].
+List<String> _validBases(Iterable<String> list, int max) {
   final out = <String>[];
-  for (final base in [dlBase, kPanelBase]) {
-    var b = base.trim();
-    while (b.endsWith('/')) {
-      b = b.substring(0, b.length - 1);
-    }
-    if (b.startsWith('https://') && !out.contains(b)) out.add(b);
+  for (final base in list) {
+    final b = _trimBase(base);
+    if (_kBase.hasMatch(b) && !out.contains(b)) out.add(b);
+    if (out.length >= max) break;
   }
   return out;
 }
 
-/// Feed degli aggiornamenti da provare, in ordine e senza doppioni (solo https): `/get/<id>.json` su ogni base
-/// ([downloadBases]), poi [fallback], la riserva di oggi su GitHub (con il repository privato fallirà senza danni).
-List<String> updateFeeds(String dlBase, String id, String fallback) {
-  final out = [for (final b in downloadBases(dlBase)) '$b/get/$id.json'];
-  final f = fallback.trim();
-  if (f.startsWith('https://') && !out.contains(f)) out.add(f);
-  return out;
-}
+/// Basi https dei download, in ordine e senza doppioni: [dlBase] (Brand.dlBase, il dominio dedicato ai download), poi
+/// le riserve [extra] (Brand.dlBase2 e i domini annunciati dal feed); al massimo 4.
+List<String> downloadBases(String dlBase, [List<String> extra = const []]) => _validBases([dlBase, ...extra], 4);
+
+/// Feed degli aggiornamenti da provare, in ordine: `/get/<id>.json` su ogni base ([downloadBases]).
+List<String> updateFeeds(String dlBase, String id, [List<String> extra = const []]) =>
+    [for (final b in downloadBases(dlBase, extra)) '$b/get/$id.json'];
 
 /// APK da provare, in ordine: [url], il link del feed che ha risposto; poi lo stesso APK (`/get/<id>.apk`) sulle basi
-/// successive a quella del link; alla fine [ghApk], l'APK della release più recente su GitHub. Un link fuori dalle
-/// basi (quello del feed di riserva di GitHub) passa direttamente a [ghApk].
-List<String> apkUrls(String url, String dlBase, String id, String ghApk) {
+/// successive a quella del link. Un link fuori dalle basi passa a tutte le basi.
+List<String> apkUrls(String url, String dlBase, String id, [List<String> extra = const []]) {
   final out = <String>[];
   if (url.startsWith('https://')) out.add(url);
-  final bases = downloadBases(dlBase);
+  final bases = downloadBases(dlBase, extra);
   final at = bases.indexWhere((b) => url.startsWith('$b/'));
-  if (at >= 0) {
-    for (final b in bases.skip(at + 1)) {
-      final u = '$b/get/$id.apk';
-      if (!out.contains(u)) out.add(u);
-    }
+  for (final b in at >= 0 ? bases.skip(at + 1) : bases) {
+    final u = '$b/get/$id.apk';
+    if (!out.contains(u)) out.add(u);
   }
-  final g = ghApk.trim();
-  if (g.startsWith('https://') && !out.contains(g)) out.add(g);
   return out;
+}
+
+/// Domini di riserva annunciati dal feed («mirrors»): solo https validi, senza doppioni, al massimo 3.
+/// null = il feed non ha la lista (quelli già ricordati restano); lista vuota = nessuna riserva.
+List<String>? feedMirrors(Object? raw) {
+  final list = asMap(raw)['mirrors'];
+  if (list is! List) return null;
+  return _validBases(list.whereType<String>(), 3);
 }
 
 /// Legge un feed con un client suo, così un indirizzo che non risponde non tocca le connessioni del catalogo:
-/// connessione al massimo 5 s (il dominio dei download non ancora attivo fa passare in fretta al pannello), risposta
+/// connessione al massimo 5 s (un dominio non attivo fa passare in fretta alla base successiva), risposta
 /// al massimo 10 s e 256 KB. Il JSON se la risposta è 200, altrimenti null; HTML o JSON rotto: FormatException.
 Future<Object?> fetchFeedJson(Uri uri) async {
   final client = HttpClient()
@@ -92,11 +108,11 @@ UpdateInfo? parseFeed(Object? raw) {
   final code = asInt(m['versionCode']) ?? _semverCode(version);
   final url = asString(m['url']) ?? '';
   if (code <= 0 || !url.startsWith('https://')) return null;
-  return UpdateInfo(code: code, version: version, url: url);
+  return UpdateInfo(code: code, version: version, url: url, mirrors: feedMirrors(m));
 }
 
 /// Primo feed valido nell'ordine di [feeds]: si passa al successivo solo se quello prima non risponde, risponde con
-/// un errore o con un JSON non valido, così con il pannello che funziona la richiesta resta una sola.
+/// un errore o con un JSON non valido, così con il dominio dei download che funziona la richiesta resta una sola.
 /// null = nessuno ha risposto bene (come una rete giù: si riprova più tardi).
 Future<UpdateInfo?> firstFeed(List<String> feeds, Future<Object?> Function(Uri uri) fetch) async {
   for (final f in feeds) {
@@ -117,10 +133,10 @@ int _semverCode(String v) {
 }
 
 /// Aggiornamento dell'app (Kairos Plus).
-/// - Il feed dice qual è l'ultima versione e da dove si scarica l'APK: prima quello del dominio dei download
-///   (store-k.download), poi quello del pannello (`/get/plus.json`, vedi [updateFeeds]) e, solo se nessuno dei due
-///   risponde bene, kairos-plus.json della release più recente su GitHub. Se l'APK non si scarica dal link del feed,
-///   la parte nativa prova le basi successive e alla fine GitHub ([apkUrls]).
+/// - Il feed dice qual è l'ultima versione e da dove si scarica l'APK: `/get/plus.json` del dominio dei download
+///   (store-k.download) e, solo se non risponde bene, quello delle riserve ([updateFeeds]); niente pannello né GitHub.
+///   Se l'APK non si scarica dal link del feed, la parte nativa prova le basi successive ([apkUrls]). I domini di
+///   riserva annunciati dal feed («mirrors») si ricordano per i controlli successivi ([saveMirrors]).
 /// - Aggiornamento in background (scelta del cliente o imposta dal pannello, acceso di serie): l'APK si scarica
 ///   e si verifica in silenzio (solo su Wi-Fi o cavo, mai durante la visione); quando è pronto si propone
 ///   «Installa ora» e al cliente resta solo la conferma di Android.
@@ -139,12 +155,17 @@ class AppUpdater extends ChangeNotifier {
     required this.savePending,
     this.fetchFeed,
     this.apkUrlsFor,
+    this.saveMirrors,
   }) {
     _sub = NativeBridge.updateEvents.listen(_onEvent);
   }
 
-  /// Feed da provare in ordine ([updateFeeds]): pannello prima, GitHub di riserva.
-  final List<String> feedUrls;
+  /// Feed da provare in ordine ([updateFeeds]), chiesti a ogni controllo: dominio dei download, poi le riserve
+  /// (anche quelle annunciate dall'ultimo feed).
+  final List<String> Function() feedUrls;
+
+  /// Domini di riserva annunciati dal feed che ha risposto («mirrors»): l'app li ricorda per i controlli successivi.
+  final void Function(List<String> mirrors)? saveMirrors;
 
   /// Lettura di un feed (le prove la sostituiscono); null = rete ([fetchFeedJson]).
   final Future<Object?> Function(Uri uri)? fetchFeed;
@@ -334,17 +355,19 @@ class AppUpdater extends ChangeNotifier {
     if (_checking || currentCode <= 0) return pending;
     _checking = true;
     try {
-      // dominio dei download, poi pannello; GitHub solo se nessuno dei due risponde con un feed valido
-      final found = await firstFeed(feedUrls, fetchFeed ?? fetchFeedJson);
+      // dominio dei download, poi le riserve solo se non risponde con un feed valido
+      final found = await firstFeed(feedUrls(), fetchFeed ?? fetchFeedJson);
       if (found == null) {
         if (manual) message = 'Impossibile controllare gli aggiornamenti adesso';
         notifyListeners();
         return pending;
       }
       _lastCheck = DateTime.now();
+      final mirrors = found.mirrors;
+      if (mirrors != null) saveMirrors?.call(mirrors);
       final version = found.version;
       final code = found.code;
-      final url = found.url; // l'APK si scarica da qui (dal pannello, se il feed è il suo)
+      final url = found.url; // l'APK si scarica da qui (dalla base del feed che ha risposto)
       if (code <= currentCode) {
         pending = null;
         ready = false;
@@ -390,7 +413,7 @@ class AppUpdater extends ChangeNotifier {
     await NativeBridge.updateInstall(u.url, u.code, alts: _alts(u.url));
   }
 
-  /// Dove riprovare l'APK se il link del feed non riesce: lo stesso APK sulle basi successive, alla fine GitHub.
+  /// Dove riprovare l'APK se il link del feed non riesce: lo stesso APK sulle basi successive.
   List<String> _alts(String url) => [
     for (final u in apkUrlsFor?.call(url) ?? const <String>[])
       if (u != url) u,

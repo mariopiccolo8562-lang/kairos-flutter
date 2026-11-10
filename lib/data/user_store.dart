@@ -33,6 +33,7 @@ class UserStore {
   static const String _kUpdSeen = 'upd_seen';
   static const String _kUpdFirst = 'upd_first';
   static const String _kUpdPending = 'upd_pending';
+  static const String _kDlMirrors = 'dl_mirrors';
 
   // ---------------------------------------------------------------------------
   // Pannello
@@ -167,6 +168,15 @@ class UserStore {
 
   Future<void> saveUpdPending(String value) =>
       value.isEmpty ? _prefs.remove(_kUpdPending) : _prefs.setString(_kUpdPending, value);
+
+  /// Domini di riserva per gli aggiornamenti annunciati dal feed («mirrors», vedi feedMirrors), uno per riga.
+  Future<List<String>> loadDlMirrors() async => [
+        for (final s in (await _prefs.getString(_kDlMirrors) ?? '').split('\n'))
+          if (s.trim().isNotEmpty) s.trim(),
+      ];
+
+  Future<void> saveDlMirrors(List<String> value) =>
+      value.isEmpty ? _prefs.remove(_kDlMirrors) : _prefs.setString(_kDlMirrors, value.join('\n'));
 
   /// Anteprima dei canali: click (1° OK riquadro, 2° OK schermo intero) | off
   Future<String> loadPreviewMode() async => await _prefs.getString(_kPreviewMode) ?? 'click';

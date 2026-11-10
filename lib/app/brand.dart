@@ -7,19 +7,15 @@ abstract final class Brand {
   static const String shortName = 'Kairos';
 
   /// Indirizzo dei download (feed degli aggiornamenti e APK), il dominio dedicato ai download: l'unico da cambiare.
-  /// L'app chiede `<dlBase>/get/plus.json`, poi panel-kairos.com, poi [updateFeedFallback]; l'APK si scarica dal campo
-  /// `url` del feed che ha risposto e, se non riesce, dalle basi successive e da [apkFallback] (vedi updateFeeds e
-  /// apkUrls in app_updater.dart).
+  /// L'app chiede `<dlBase>/get/plus.json` e, solo se non risponde bene, lo stesso file sulle riserve ([dlBase2] e i
+  /// domini annunciati dal feed in «mirrors»); niente pannello né GitHub. L'APK si scarica dal campo `url` del feed che
+  /// ha risposto e, se non riesce, dalle basi successive (vedi updateFeeds e apkUrls in app_updater.dart).
   static const String dlBase = 'https://store-k.download';
 
-  /// Riserva degli aggiornamenti, solo se dominio dei download e pannello non rispondono: feed della release più
-  /// recente su GitHub (versione, numero e link dell'APK). Quando il repository diventerà privato fallirà senza danni.
-  static const String updateFeedFallback =
-      'https://github.com/mariopiccolo8562-lang/kairos-flutter/releases/latest/download/kairos-plus.json';
-
-  /// Ultima riserva dell'APK, dopo le basi dei download: l'APK della release più recente su GitHub.
-  static const String apkFallback =
-      'https://github.com/mariopiccolo8562-lang/kairos-flutter/releases/latest/download/kairos-plus.apk';
+  /// Secondo dominio dei download, di riserva, con gli stessi percorsi: vuoto finché non se ne compra uno. Si imposta
+  /// senza toccare il codice con la variabile KAIROS_DL_BASE2 del repository (il workflow la passa con --dart-define).
+  /// Anche senza, le app già installate imparano le riserve dal feed («mirrors», dalla lista DL_HOSTS del pannello).
+  static const String dlBase2 = String.fromEnvironment('KAIROS_DL_BASE2');
 
   /// Viola Kairos Plus (le altre app Kairos usano rosso, blu, arancio e ambra).
   static const Color accent = Color(0xFFA855F7);

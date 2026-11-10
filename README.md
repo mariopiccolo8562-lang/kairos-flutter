@@ -57,7 +57,7 @@ Ogni modifica su `main` compila l'APK e pubblica la release `v0.1.N` con:
   `https://github.com/mariopiccolo8562-lang/kairos-flutter/releases/latest/download/kairos-plus.apk`
 - `kairos-plus.json` — versione per il pannello.
 
-L'app chiede gli aggiornamenti a `https://store-k.download/get/plus.json` (indirizzo dei download `Brand.dlBase` in `lib/app/brand.dart`), poi al pannello `https://panel-kairos.com/get/plus.json`, e scarica l'APK dal link che c'è dentro (se non riesce, dalle basi successive e alla fine dall'ultima release); solo se nessuno dei due risponde legge `kairos-plus.json` dell'ultima release (riserva finché il repository è pubblico).
+L'app chiede gli aggiornamenti solo a `https://store-k.download/get/plus.json` (indirizzo dei download `Brand.dlBase` in `lib/app/brand.dart`) e scarica l'APK dal link che c'è dentro; niente pannello né GitHub. Se il dominio non risponde prova le riserve con gli stessi percorsi: `Brand.dlBase2` (variabile `KAIROS_DL_BASE2` del repository, passata dal workflow con `--dart-define`; vuota finché non c'è un secondo dominio) e i domini che il feed annuncia in `mirrors` (la lista `DL_HOSTS` del pannello: l'app li ricorda, così un dominio di riserva comprato dopo arriva anche alle app già installate).
 
 ### Firma
 
