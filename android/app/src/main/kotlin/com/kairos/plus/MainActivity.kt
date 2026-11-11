@@ -117,6 +117,10 @@ class MainActivity : FlutterActivity() {
                     Updater.cancelPrefetch()
                     result.success(true)
                 }
+                // DNS cifrato (voce «sdns» del pannello): lo decide la parte Flutter, qui si accende e si spegne (DnsShield.kt)
+                "dnsStart" -> { DnsShield.start(this); result.success(DnsShield.state) }
+                "dnsStop" -> { DnsShield.stop(applicationContext); result.success(DnsShield.state) }
+                "dnsState" -> result.success(DnsShield.state)
                 else -> result.notImplemented()
             }
         }
@@ -135,6 +139,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == DnsShield.REQ) DnsShield.onConsent(applicationContext, resultCode == RESULT_OK)
         if (requestCode == REQ_PLAY) {
             val r = pendingPlay
             pendingPlay = null

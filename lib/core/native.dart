@@ -92,6 +92,25 @@ abstract final class NativeBridge {
   static final StreamController<Map<String, dynamic>> _updateEvents = StreamController<Map<String, dynamic>>.broadcast();
   static bool _listening = false;
 
+  /// DNS cifrato (voce «sdns» del pannello): accende ([on]) o spegne l'interfaccia locale che porta le domande DNS dentro
+  /// una connessione protetta. Risponde lo stato: off | asking | on | denied | error | other; vuoto se non disponibile.
+  static Future<String> dns(bool on) async {
+    try {
+      return (await _channel.invokeMethod<Object?>(on ? 'dnsStart' : 'dnsStop'))?.toString() ?? '';
+    } on Object {
+      return '';
+    }
+  }
+
+  /// Stato attuale del DNS cifrato (vedi [dns]).
+  static Future<String> dnsState() async {
+    try {
+      return (await _channel.invokeMethod<Object?>('dnsState'))?.toString() ?? '';
+    } on Object {
+      return '';
+    }
+  }
+
   /// Eventi dell'anteprima (il video è partito, errore, fermata).
   static Stream<PreviewEvent> get previewEvents {
     _listen();

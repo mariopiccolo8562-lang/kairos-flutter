@@ -371,6 +371,7 @@ class PanelClient {
     String rcv = '',
     Map<String, Object?> stats = const {},
     bool vis = true,
+    String sdns = '',
   }) async {
     try {
       final r = await _post('/api/player/heartbeat', {
@@ -389,6 +390,7 @@ class PanelClient {
         'screen': screen.length > 20 ? screen.substring(0, 20) : screen,
         'net': {'type': asString(stats['net']) ?? ''},
         'vpn': 'off',
+        if (sdns.isNotEmpty) 'sdns': sdns, // DNS cifrato: stato, solo se il pannello lo ha acceso
         'cfg': cfg, // controllo remoto: impostazioni attuali dell'app
         'rcv': rcv, // configurazione del pannello applicata
         if (stats.isNotEmpty) 'stats': stats, // banda, classi, stalli, formato del lettore

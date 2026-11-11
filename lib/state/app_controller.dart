@@ -495,8 +495,19 @@ class AppController {
     }
   }
 
+  /// DNS cifrato deciso dal pannello (voce «sdns»: on | off, vuota = spento): acceso solo con l'abbonamento attivo.
+  /// Non è una scelta del cliente. Stato dell'ultima volta, per il battito.
+  String _dns = '';
+  bool get _dnsWanted => _rc['sdns']?.toString() == 'on';
+
+  Future<void> _syncDns([bool? active]) async {
+    final on = _dnsWanted && (active ?? _state?.active ?? false);
+    _dns = await NativeBridge.dns(on);
+  }
+
   Future<void> _onRegistered(PanelState s) async {
     if (s.raw.containsKey('rc')) await _applyRemote(s.raw['rc'], asString(s.raw['rcv']) ?? '');
+    unawaited(_syncDns(s.active)); // a ogni apertura, anche se la configurazione è la stessa di prima
     if (!_updaterStarted && s.active) {
       _updaterStarted = true;
       updater.start();
@@ -944,7 +955,9 @@ class AppController {
         await hidden;
         if (!_visible) return 0;
       }
+      if (_dnsWanted) _dns = await NativeBridge.dnsState();
       final call = panel.heartbeat(
+        sdns: _dnsWanted ? _dns : '',
         state: w?.state ?? 'idle',
         title: w?.title ?? '',
         channel: w?.channel ?? '',
@@ -1309,6 +1322,7 @@ class AppController {
     final previewBefore = previewEnabled;
     _rc = next;
     _rcv = rcv;
+    unawaited(_syncDns()); // voce «sdns» accesa o spenta dal pannello
     unawaited(_syncPlayerBox()); // voce «qbox» cambiata durante la visione
     await _store.saveRemote(raw, rcv);
     _applyLite();
