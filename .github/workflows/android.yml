@@ -91,8 +91,10 @@ jobs:
 
       # Release pubblica: l'ultima versione ha sempre lo stesso link, usato dal Kairos Store:
       # https://github.com/mariopiccolo8562-lang/kairos-flutter/releases/latest/download/kairos-plus.apk
+      # Si pubblica solo da main: da un altro ramo (compilazione di prova, anche avviata a mano) esce solo l'APK tra gli Artifacts
       - name: Pubblicazione (link fisso per il Kairos Store)
         id: release
+        if: github.ref == 'refs/heads/main'
         continue-on-error: true
         uses: softprops/action-gh-release@v2
         with:
@@ -106,7 +108,7 @@ jobs:
       # Se GitHub risponde con un errore (es. 500) la release si pubblica comunque:
       # nuovi tentativi con un altro sistema, a distanza crescente.
       - name: Pubblicazione (nuovo tentativo)
-        if: steps.release.outcome == 'failure'
+        if: github.ref == 'refs/heads/main' && steps.release.outcome == 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
