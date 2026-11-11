@@ -33,6 +33,7 @@ class MainActivity : FlutterActivity() {
         (call.argument<List<Any?>>("alts") ?: emptyList()).mapNotNull { it as? String }.filter { it.startsWith("https://") }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        Quiet.watch(application) // Android 12+: aggiornamento senza conferma quando il cliente esce dall'app
         super.configureFlutterEngine(flutterEngine)
         val ch = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL)
         channel = ch
