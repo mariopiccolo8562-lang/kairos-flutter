@@ -4,6 +4,8 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <!-- aggiornamento dell'app dal pannello: apre l'installer di Android con l'APK scaricato -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+    <!-- Android 12+: aggiornamento di se stessa senza conferma (vedi Quiet.kt) -->
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION"/>
     <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
     <uses-feature android:name="android.software.leanback" android:required="false"/>
     <application
@@ -54,6 +56,8 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <!-- esito dell'aggiornamento senza conferma -->
+        <receiver android:name=".QuietDone" android:exported="false"/>
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

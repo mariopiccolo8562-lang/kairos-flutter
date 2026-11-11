@@ -554,6 +554,32 @@ void main() {
       u.dispose();
     });
 
+    test('Android 12+, si installa da sola all\'uscita: nessuna proposta (obbligatorio sì, dopo 3 giorni torna)', () async {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      status = <String, Object?>{'ready': true, 'canInstall': true, 'quiet': true};
+      final q = updater(days: null, first: '21:$now');
+      await q.restore();
+      expect(q.quiet, isTrue);
+      expect(q.offer.value, isNull);
+      expect(await q.fromPanel(), contains('si installa da sola'));
+      q.dispose();
+      final must = updater(days: 0, first: '21:$now');
+      await must.restore();
+      expect(must.mustUpdate, isTrue);
+      expect(must.offer.value?.code, 21);
+      must.dispose();
+      final old = updater(days: null, first: '21:${now - 4 * 86400000}');
+      await old.restore();
+      expect(old.offer.value?.code, 21);
+      old.dispose();
+      status = <String, Object?>{'ready': true, 'canInstall': true, 'quiet': false, 'quietBlocked': true};
+      final blocked = updater(days: null, first: '21:$now');
+      await blocked.restore();
+      expect(blocked.offer.value?.code, 21);
+      expect(blocked.message, contains('Blocco automatico'));
+      blocked.dispose();
+    });
+
     test('versione salvata già installata o APK non ancora scaricato: nessun blocco', () async {
       final old = updater(pending: '{"code":20,"version":"0.1.20","url":"https://example.org/a.apk"}');
       await old.restore();

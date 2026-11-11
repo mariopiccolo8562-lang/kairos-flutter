@@ -221,6 +221,22 @@ class AppUpdater extends ChangeNotifier {
   /// L'APK di [pending] è già scaricato e verificato.
   bool ready = false;
 
+  /// Android 12+ (11 novembre 2026): la versione si installa da sola quando il cliente esce dall'app (Quiet.kt nativo),
+  /// quindi niente proposta finché non è obbligatoria; se dopo 3 giorni non si è installata (app mai chiusa), se Android
+  /// non lo permette o lo scaricamento in background non riesce, torna la proposta di sempre.
+  bool quiet = false;
+
+  static const _blockedHint =
+      'Se Android blocca l\'installazione: spegni «Blocco automatico» in Impostazioni › Sicurezza e privacy, poi riprova.';
+
+  bool _quietNow(UpdateInfo u) {
+    if (!quiet || !(ready || (backgroundEnabled() && _failed < 3))) return false;
+    final parts = _first.split(':');
+    if (parts.length != 2 || int.tryParse(parts[0]) != u.code) return true;
+    final first = int.tryParse(parts[1]) ?? 0;
+    return DateTime.now().millisecondsSinceEpoch - first < 3 * 86400000;
+  }
+
   /// Avanzamento del download richiesto dal cliente (0-100), -1 se fermo.
   int progress = -1;
 
@@ -274,6 +290,8 @@ class AppUpdater extends ChangeNotifier {
       if (_disposed || pending != null) return; // nel frattempo ha risposto il controllo in rete
       pending = u;
       ready = st['ready'] == true;
+      quiet = st['quiet'] == true;
+      if (st['quietBlocked'] == true) message ??= _blockedHint; // installazione bloccata su un Samsung
       notifyListeners();
       if (ready) _maybeOffer();
     } on Object {
@@ -345,6 +363,7 @@ class AppUpdater extends ChangeNotifier {
   Future<String> fromPanel() async {
     final u = await check(force: true);
     if (u == null) return 'già aggiornata ($currentVersion)';
+    if (_quietNow(u)) return 'versione ${u.version}${ready ? ' pronta' : ' in scaricamento'}: si installa da sola quando il cliente esce dall\'app';
     if (watching()) return 'versione ${u.version}: proposta a fine visione';
     return ready ? 'versione ${u.version} pronta: proposta al cliente' : 'versione ${u.version} in scaricamento';
   }
@@ -389,6 +408,8 @@ class AppUpdater extends ChangeNotifier {
       await _firstSeen(u);
       final st = await NativeBridge.updateStatus(code);
       ready = st['ready'] == true;
+      quiet = st['quiet'] == true;
+      if (st['quietBlocked'] == true) message ??= _blockedHint; // installazione bloccata su un Samsung
       final metered = st['metered'] == true;
       // mai durante la visione: il download riparte da onPlaybackEnded quando il lettore si chiude
       if (!ready && !manual && (backgroundEnabled() || force) && (force || !metered) && !watching() && _failed < 3) {
@@ -428,6 +449,7 @@ class AppUpdater extends ChangeNotifier {
       return;
     }
     _offerLater = false;
+    if (!manual && !mustUpdate && _quietNow(u)) return; // Android 12+: si installa da sola quando il cliente esce dall'app
     if (!manual && !mustUpdate && _offeredCode == u.code) return;
     _offeredCode = u.code;
     offer.value = u;

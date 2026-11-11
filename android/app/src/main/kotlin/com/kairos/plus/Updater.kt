@@ -29,8 +29,8 @@ import kotlin.concurrent.thread
  * si verifica (stesso pacchetto, versione più nuova, stessa firma) e si apre l'installer di Android.
  * - prefetch: scaricamento in background, senza finestre; a fine corsa Flutter riceve updateEvent {type: ready | failed}
  * - install: se l'APK è già pronto si apre subito l'installer, altrimenti si scarica con gli eventi progress
- * Android chiede comunque la conferma del cliente per installare (nessuna installazione silenziosa senza
- * gestione del dispositivo): l'aggiornamento in background toglie l'attesa del download, non quel tocco.
+ * Android 11 e precedenti chiedono sempre la conferma del cliente; da Android 12 la versione pronta si installa da sola
+ * quando il cliente esce dall'app (Quiet.kt, 11 novembre 2026).
  */
 object Updater {
     private val busy = AtomicBoolean(false)
@@ -68,6 +68,9 @@ object Updater {
         "metered" to metered(ctx),
         "busy" to busy.get(),
         "canInstall" to (Build.VERSION.SDK_INT < 26 || ctx.packageManager.canRequestPackageInstalls()),
+        // Android 12+: si installa da sola quando il cliente esce dall'app (Quiet.kt), Flutter non la propone
+        "quiet" to Quiet.ok(ctx, code),
+        "quietBlocked" to Quiet.blocked(ctx, code),
     )
 
     /**
