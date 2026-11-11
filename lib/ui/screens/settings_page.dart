@@ -148,7 +148,7 @@ class _SettingsPageState extends State<SettingsPage> {
               _SettingTile(
                 focusNode: linkNode,
                 title: 'Collega un\'altra TV',
-                value: acc == null ? 'Codice a 6 cifre' : 'Connessioni: ${acc.conns} di ${acc.maxConn}',
+                value: acc == null ? 'Codice a 6 cifre' : (acc.maxConn >= 999 ? 'Connessioni: ${acc.conns} (illimitate)' : 'Connessioni: ${acc.conns} di ${acc.maxConn}'),
                 onSelect: _linkTv,
               ),
             if (messages.isNotEmpty)

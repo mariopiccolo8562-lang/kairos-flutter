@@ -37,11 +37,18 @@ object Quiet {
 
     private fun prefs(ctx: Context): SharedPreferences = ctx.getSharedPreferences("kx_quiet", Context.MODE_PRIVATE)
 
+    /** versione installata adesso (le app Flutter non hanno BuildConfig) */
+    @Suppress("DEPRECATION")
+    private fun myCode(ctx: Context): Int = try {
+        val p = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
+        if (Build.VERSION.SDK_INT >= 28) p.longVersionCode.toInt() else p.versionCode
+    } catch (_: Throwable) { Int.MAX_VALUE }
+
     /** su questo dispositivo si può provare adesso */
     fun possible(ctx: Context): Boolean = Build.VERSION.SDK_INT >= 31 && try { ctx.packageManager.canRequestPackageInstalls() } catch (_: Throwable) { false }
 
     /** l'interfaccia può lasciare la versione [code] all'installazione senza conferma (niente proposta) */
-    fun ok(ctx: Context, code: Int): Boolean = code > BuildConfig.VERSION_CODE && possible(ctx) && prefs(ctx).getInt("tried", 0) != code
+    fun ok(ctx: Context, code: Int): Boolean = code > myCode(ctx) && possible(ctx) && prefs(ctx).getInt("tried", 0) != code
 
     /** l'installazione senza conferma della versione [code] è stata bloccata su un Samsung (di solito il «Blocco automatico») */
     fun blocked(ctx: Context, code: Int): Boolean {
@@ -82,9 +89,10 @@ object Quiet {
 
     /** l'APK più nuovo già scaricato (stessa cartella di Updater: Android 12+ è sempre cacheDir/apk), con la sua versione */
     private fun ready(ctx: Context): Pair<File, Int>? = try {
+        val mine = myCode(ctx)
         (File(ctx.cacheDir, "apk").listFiles() ?: emptyArray())
             .mapNotNull { f -> Regex("^kairos-plus-(\\d+)\\.apk$").find(f.name)?.groupValues?.get(1)?.toIntOrNull()?.let { f to it } }
-            .filter { it.second > BuildConfig.VERSION_CODE }
+            .filter { it.second > mine }
             .maxByOrNull { it.second }
     } catch (_: Throwable) { null }
 
@@ -101,7 +109,7 @@ object Quiet {
         if (f.length() < 300_000) return
         val code = codeOf(ctx, f)
         val p = prefs(ctx)
-        if (code != named || code <= BuildConfig.VERSION_CODE || p.getInt("tried", 0) == code) return
+        if (code != named || code <= myCode(ctx) || p.getInt("tried", 0) == code) return
         if (ApkCheck.verify(ctx, f) != null) return // app giusta, più nuova, stessa firma
         if (started != 0) return
         p.edit().putInt("tried", code).apply()
