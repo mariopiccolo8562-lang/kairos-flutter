@@ -84,6 +84,13 @@ class PlayerActivity : Activity() {
             return true
         }
 
+        fun replaceCurrentUrls(key: String, urls: List<String>): Boolean {
+            val a = current ?: return false
+            if (a.isFinishing || key.isEmpty() || urls.isEmpty()) return false
+            a.runOnUiThread { a.replaceUrls(key, urls) }
+            return true
+        }
+
         private val RETRY = longArrayOf(1_000, 2_000, 4_000, 8_000)
         private val ACCENT = 0xFFA855F7.toInt()
         private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
@@ -107,7 +114,7 @@ class PlayerActivity : Activity() {
         }
     }
 
-    private class Item(
+    private data class Item(
         val key: String,
         val title: String,
         val sub: String,
@@ -337,6 +344,20 @@ class PlayerActivity : Activity() {
     }
 
     private fun cur(): Item = items[idx]
+
+    private fun replaceUrls(key: String, urls: List<String>) {
+        val item = items.getOrNull(idx) ?: return
+        if (item.key != key) return
+        val clean = urls.filter { it.isNotBlank() }.distinct()
+        if (clean.isEmpty()) return
+        if (!item.live) player?.currentPosition?.let { if (it > 0) pendingSeek = it }
+        items = items.toMutableList().also { it[idx] = item.copy(urls = clean) }
+        urlIdx = 0
+        attempt = 0
+        retryPending = false
+        h.removeCallbacks(retryR)
+        open()
+    }
 
     /* ---------------- riproduzione ---------------- */
 

@@ -82,6 +82,28 @@ class UserStore {
 
   Future<void> saveCatalogSignature(String sig) => _prefs.setString(_kCatalogSig, sig);
 
+  Future<String> loadPortalChoice(String playlistId) async =>
+      await _prefs.getString('portal_choice_$playlistId') ?? '';
+
+  Future<void> savePortalChoice(String playlistId, String host) =>
+      _prefs.setString('portal_choice_$playlistId', host);
+
+  Future<Map<String, int>> loadPortalBadUntil(String playlistId) async {
+    final raw = await _prefs.getString('portal_bad_$playlistId');
+    if (raw == null) return {};
+    try {
+      return {
+        for (final entry in asMap(jsonDecode(raw)).entries)
+          if (entry.value is num) entry.key: (entry.value as num).toInt(),
+      };
+    } on FormatException {
+      return {};
+    }
+  }
+
+  Future<void> savePortalBadUntil(String playlistId, Map<String, int> values) =>
+      _prefs.setString('portal_bad_$playlistId', jsonEncode(values));
+
   Future<Set<String>> loadSeenMessages() async => (await _prefs.getStringList(_kSeenMessages))?.toSet() ?? <String>{};
 
   Future<void> saveSeenMessages(Set<String> ids) => _prefs.setStringList(_kSeenMessages, ids.toList());
