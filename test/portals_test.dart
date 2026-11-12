@@ -140,6 +140,36 @@ void main() {
         ),
         rotated[1],
       );
+      final autoBad = {
+        PortalRotation.hostKey(candidates[0]): 2000,
+        PortalRotation.hostKey(candidates[1]): 2000,
+      };
+      expect(
+        PortalRotation.next(
+          mode: 'auto',
+          candidates: candidates,
+          code: '',
+          current: 'http://missing.test',
+          badUntil: autoBad,
+          nowMs: now,
+        ),
+        candidates[2],
+      );
+      final rotatedBad = {
+        PortalRotation.hostKey(rotated[0]): 2000,
+        PortalRotation.hostKey(rotated[1]): 2000,
+      };
+      expect(
+        PortalRotation.next(
+          mode: 'rot',
+          candidates: candidates,
+          code: 'ABC123',
+          current: 'http://missing.test',
+          badUntil: rotatedBad,
+          nowMs: now,
+        ),
+        rotated[2],
+      );
       expect(
         PortalRotation.next(
           mode: 'main',

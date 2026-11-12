@@ -1082,7 +1082,9 @@ class AppController {
     if (sat.isNotEmpty && pl != null) {
       await _markPortalHostsBad(pl, sat);
       final selected = await _portalHost(pl);
-      if (selected.isNotEmpty && selected != _account?.server) {
+      if (selected.isNotEmpty &&
+          PortalRotation.hostKey(selected) !=
+              PortalRotation.hostKey(_account?.server ?? '')) {
         await _store.savePortalChoice(pl.id, selected);
         await _applyState(s);
         await _replacePlayerPortalUrls(pl, host: selected, advance: false);
