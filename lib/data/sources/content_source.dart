@@ -22,6 +22,9 @@ abstract class ContentSource {
 
   bool get supportsEpg => false;
 
+  /// Guida completa del server (XMLTV), letta in sottofondo dalla parte Android come riserva della guida breve.
+  String? get xmltvUrl => null;
+
   /// Indirizzo della guida breve di un canale, letto dal lettore nativo.
   String? epgUrlFor(MediaItem channel) => null;
 

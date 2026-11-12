@@ -29,6 +29,9 @@ class XtreamSource extends ContentSource {
   @override
   bool get supportsEpg => true;
 
+  @override
+  String? get xmltvUrl => _server.isEmpty || _user.isEmpty ? null : '$_server/xmltv.php?username=$_u&password=$_p';
+
   /// Verifica utente e password e restituisce i dati dell'abbonamento.
   Future<AccountInfo> authenticate() async {
     final json = asMap(await fetchJson(_api(), timeout: const Duration(seconds: 20)));
@@ -86,6 +89,7 @@ class XtreamSource extends ContentSource {
       year: _year(asString(info['releasedate']) ?? asString(info['release_date'])),
       rating: _rating(info),
       durationSecs: asInt(info['duration_secs']),
+      trailer: asString(info['youtube_trailer']),
     );
   }
 
@@ -149,6 +153,7 @@ class XtreamSource extends ContentSource {
       genre: asString(info['genre']),
       year: _year(asString(info['releaseDate']) ?? asString(info['release_date'])),
       rating: _rating(info),
+      trailer: asString(info['youtube_trailer']),
     );
   }
 

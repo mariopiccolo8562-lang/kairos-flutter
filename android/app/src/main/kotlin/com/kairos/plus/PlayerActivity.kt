@@ -57,6 +57,9 @@ class PlayerActivity : Activity() {
     companion object {
         @Volatile private var current: PlayerActivity? = null
 
+        /** il lettore è aperto: i lavori in sottofondo (guida XMLTV) aspettano */
+        fun isOpen(): Boolean = current != null
+
         /** chiude il lettore aperto (es. «Disconnetti» dal pannello) */
         fun closeCurrent() {
             val a = current ?: return

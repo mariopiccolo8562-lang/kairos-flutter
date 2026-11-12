@@ -157,8 +157,11 @@ class SeriesDetails {
     this.genre,
     this.year,
     this.rating,
+    this.trailer,
   });
 
+  /// Trailer messo dalla linea (codice o link di YouTube), se c'è.
+  final String? trailer;
   final List<int> seasons;
   final Map<int, List<Episode>> episodes;
   final String? plot;
@@ -181,7 +184,11 @@ class MovieDetails {
     this.year,
     this.rating,
     this.durationSecs,
+    this.trailer,
   });
+
+  /// Trailer messo dalla linea (codice o link di YouTube), se c'è.
+  final String? trailer;
 
   final String? plot;
   final String? backdrop;
@@ -192,6 +199,24 @@ class MovieDetails {
   final String? year;
   final double? rating;
   final int? durationSecs;
+}
+
+/// Un trailer: [yt] codice (o link) del video su YouTube oppure [url] file video diretto (anteprima di Apple).
+class TrailerRef {
+  const TrailerRef({this.yt = '', this.url = '', this.title = ''});
+
+  final String yt;
+  final String url;
+  final String title;
+
+  /// Risposta del pannello (/api/player/trailer); null se non ha trovato niente.
+  static TrailerRef? fromPanel(Map<String, dynamic> j) {
+    final yt = (j['yt'] is String ? j['yt'] as String : '').trim();
+    final raw = (j['url'] is String ? j['url'] as String : '').trim();
+    final url = raw.startsWith('https://') ? raw : '';
+    if (yt.isEmpty && url.isEmpty) return null;
+    return TrailerRef(yt: yt, url: url, title: j['title'] is String ? j['title'] as String : '');
+  }
 }
 
 class EpgEntry {

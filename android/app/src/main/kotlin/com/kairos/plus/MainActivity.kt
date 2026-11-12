@@ -121,6 +121,37 @@ class MainActivity : FlutterActivity() {
                 "dnsStart" -> { DnsShield.start(this); result.success(DnsShield.state) }
                 "dnsStop" -> { DnsShield.stop(applicationContext); result.success(DnsShield.state) }
                 "dnsState" -> result.success(DnsShield.state)
+                // guida XMLTV di riserva (Guide.kt): Flutter passa le fonti in ordine e i canali (id della guida, nome)
+                "guideBuild" -> {
+                    val sources = (call.argument<List<Any?>>("sources") ?: emptyList()).mapNotNull { it as? String }
+                    val channels = (call.argument<List<Any?>>("channels") ?: emptyList()).mapNotNull { row ->
+                        (row as? List<*>)?.let { ((it.getOrNull(0) as? String) ?: "") to ((it.getOrNull(1) as? String) ?: "") }
+                    }
+                    val ua = call.argument<String>("ua") ?: "KairosPlus"
+                    val force = call.argument<Boolean>("force") == true
+                    result.success(try { Guide.build(applicationContext, sources, channels, ua, force) } catch (_: Throwable) { "error" })
+                }
+                "guideQuery" -> {
+                    val epg = call.argument<String>("epg") ?: ""
+                    val name = call.argument<String>("name") ?: ""
+                    val limit = call.argument<Int>("limit") ?: 4
+                    val app = applicationContext
+                    Guide.reader.execute {
+                        val list = Guide.query(app, epg, name, limit)
+                        runOnUiThread { try { result.success(list) } catch (_: Throwable) {} }
+                    }
+                }
+                "guideBuiltAt" -> result.success(Guide.builtAt(applicationContext))
+                // trailer di YouTube dentro l'app (TrailerActivity, in un processo a parte)
+                "trailer" -> {
+                    val id = Yt.id(call.argument<String>("yt") ?: "")
+                    if (id == null) result.success(false)
+                    else {
+                        preview?.release()
+                        TrailerActivity.start(this, id, call.argument<String>("title") ?: "")
+                        result.success(true)
+                    }
+                }
                 else -> result.notImplemented()
             }
         }

@@ -126,6 +126,11 @@ class UserStore {
 
   Future<void> saveLiveFormat(String format) => _prefs.setString(_kLiveFormat, format);
 
+  /// Guida XMLTV esterna messa dal cliente (vuoto = nessuna).
+  Future<String> loadExternalEpg() async => await _prefs.getString('epg_external') ?? '';
+
+  Future<void> saveExternalEpg(String url) => _prefs.setString('epg_external', url);
+
   /// Grafica leggera: auto | on | off
   Future<String> loadLiteMode() async => await _prefs.getString(_kLiteMode) ?? 'auto';
 

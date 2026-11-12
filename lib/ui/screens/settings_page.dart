@@ -60,6 +60,25 @@ class _SettingsPageState extends State<SettingsPage> {
     await app.choosePlaylist(all[index].id);
   }
 
+  /// Guida XMLTV in più, messa dal cliente: riempie i canali che la guida del server non copre.
+  Future<void> _externalEpg() async {
+    final app = AppScope.of(context);
+    final value = await showTvText(
+      context,
+      title: 'Guida XMLTV esterna',
+      message: 'Indirizzo http:// o https:// di una guida XMLTV. Lascia vuoto per toglierla.',
+      initial: app.externalEpgUrl,
+      hint: 'https://…',
+    );
+    if (value == null || !mounted) return;
+    if (value.isNotEmpty && !value.startsWith('http://') && !value.startsWith('https://')) {
+      await showTvMessage(context, title: 'Indirizzo non valido', message: 'Inserisci un indirizzo che comincia con http:// o https://');
+      return;
+    }
+    await app.setExternalEpgUrl(value);
+    if (mounted) setState(() {});
+  }
+
   Future<void> _linkTv() async {
     final app = AppScope.of(context);
     try {
@@ -157,6 +176,12 @@ class _SettingsPageState extends State<SettingsPage> {
                 title: 'Messaggi del fornitore',
                 value: messages.length == 1 ? '1 messaggio' : '${messages.length} messaggi',
                 onSelect: () => _showMessages(messages),
+              ),
+            if (app.canSetEpgUrl)
+              _SettingTile(
+                title: 'Guida XMLTV esterna',
+                value: app.externalEpgUrl.isEmpty ? 'Non impostata: un indirizzo in più per i canali senza guida' : 'Configurata',
+                onSelect: _externalEpg,
               ),
             const SizedBox(height: 12),
             const _SectionTitle('Riproduzione e grafica'),

@@ -41,6 +41,15 @@
             android:theme="@style/PlayerTheme"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|navigation|uiMode|density"
             android:hardwareAccelerated="true"/>
+        <!-- Trailer di YouTube dentro l'app: processo a parte che si chiude all'uscita -->
+        <activity
+            android:name=".TrailerActivity"
+            android:exported="false"
+            android:process=":trailer"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@style/PlayerTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|screenLayout|navigation|uiMode"
+            android:hardwareAccelerated="true"/>
         <!-- l'installer di Android legge l'APK scaricato dalla cache dell'app -->
         <provider
             android:name="androidx.core.content.FileProvider"

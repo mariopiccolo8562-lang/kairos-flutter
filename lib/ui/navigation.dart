@@ -52,6 +52,54 @@ void _pausePreview(BuildContext context) => AppScope.of(context).stopPreview();
 // ---------------------------------------------------------------------------
 // Controllo genitori: attivo di serie con il PIN 0000 (al primo avvio si chiede di sceglierne uno proprio).
 
+/// Chiede un testo (es. un indirizzo); null se annullato. Si può confermare anche vuoto.
+Future<String?> showTvText(
+  BuildContext context, {
+  required String title,
+  required String message,
+  String initial = '',
+  String hint = '',
+}) {
+  final controller = TextEditingController(text: initial);
+  return showDialog<String>(
+    context: context,
+    builder: (context) {
+      void submit() => Navigator.of(context).pop(controller.text.trim());
+      return _dialogFrame(
+        width: 620,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(title, style: AppText.title),
+            const SizedBox(height: 8),
+            Text(message, style: AppText.body),
+            const SizedBox(height: 16),
+            TvTextField(
+              controller: controller,
+              autofocus: true,
+              keyboardType: TextInputType.url,
+              textInputAction: TextInputAction.done,
+              maxLength: 400,
+              hint: hint,
+              onSubmitted: (value) => submit(),
+            ),
+            const SizedBox(height: 18),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TvButton(label: 'Annulla', onPressed: () => Navigator.of(context).pop()),
+                const SizedBox(width: 12),
+                TvButton(label: 'Salva', primary: true, onPressed: submit),
+              ],
+            ),
+          ],
+        ),
+      );
+    },
+  );
+}
+
 /// Chiede il PIN di 4 cifre; null se annullato.
 Future<String?> showParentalPin(BuildContext context, {required String title, String hint = 'Inserisci il PIN di 4 cifre'}) {
   final controller = TextEditingController();

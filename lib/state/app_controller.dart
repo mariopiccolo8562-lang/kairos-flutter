@@ -269,7 +269,51 @@ class AppController {
   String get appVersion => device.version.isEmpty ? '0.1' : device.version;
   Account? get account => _account;
   PanelPlaylist? get playlist => _playlist;
-  bool get supportsEpg => _source?.supportsEpg ?? false;
+  /// C'è una guida da mostrare: quella breve del server oppure una guida XMLTV (del server o esterna) letta in sottofondo.
+  bool get supportsEpg => (_source?.supportsEpg ?? false) || _guideSources.isNotEmpty;
+
+  // ---------- guida XMLTV di riserva (parte Android): prima quella del server, poi quella esterna del cliente ----------
+  String _externalEpg = '';
+  DateTime? _guideAskedAt;
+  String _guideAskedFor = '';
+
+  /// Il fornitore lascia mettere una guida diversa (permesso «epgUrl» del pannello; assente = sì).
+  bool get canSetEpgUrl => _state?.perm('epgUrl') ?? true;
+
+  String get externalEpgUrl => _externalEpg;
+
+  List<String> get _guideSources {
+    final ext = _externalEpg.trim();
+    return <String>[
+      ?_source?.xmltvUrl,
+      if (canSetEpgUrl && (ext.startsWith('http://') || ext.startsWith('https://'))) ext,
+    ];
+  }
+
+  Future<void> setExternalEpgUrl(String url) async {
+    _externalEpg = url.trim();
+    await _store.saveExternalEpg(_externalEpg);
+    _epgCache.clear();
+    _scheduleGuide(force: true);
+  }
+
+  /// Chiede alla parte Android di leggere la guida XMLTV in sottofondo. Lei stessa non la rilegge prima di 8 ore se fonti
+  /// e canali sono gli stessi; qui non si chiede più di una volta ogni 10 minuti, e mai durante la visione.
+  void _scheduleGuide({bool force = false}) {
+    final cat = catalog.value;
+    final sources = _guideSources;
+    if (_disposed || _inPlayer || cat == null || cat.live.isEmpty || sources.isEmpty) return;
+    final now = DateTime.now();
+    final key = '${sources.join('|')}|${cat.live.length}|${cat.fetchedAt}';
+    final last = _guideAskedAt;
+    if (!force && key == _guideAskedFor && last != null && now.difference(last) < const Duration(minutes: 10)) return;
+    _guideAskedAt = now;
+    _guideAskedFor = key;
+    final channels = <List<String>>[
+      for (final c in cat.live) [c.epgId ?? '', c.name],
+    ];
+    unawaited(NativeBridge.guideBuild(sources: sources, channels: channels, ua: net.userAgent, force: force));
+  }
   /// privacy già accettata, oppure il fornitore ha deciso dal pannello di non mostrarla
   bool get privacyOk => _privacyOk || _rc['privacy']?.toString() == 'skip';
 
@@ -298,6 +342,7 @@ class AppController {
       _store.loadServer(),
     ).wait;
     final mirrorsWait = _store.loadDlMirrors().catchError((Object _) => const <String>[]);
+    final epgWait = _store.loadExternalEpg().catchError((Object _) => '');
     final userWait = (
       _store.loadFavorites(),
       _store.loadProgress(),
@@ -316,6 +361,7 @@ class AppController {
     _bgUpdate = savedBg;
     _updSeen = savedUpdSeen;
     _dlMirrors = await mirrorsWait;
+    _externalEpg = await epgWait;
     _updater = AppUpdater(
       feedUrls: () => updateFeeds(Brand.dlBase, 'plus', _dlExtra),
       apkUrlsFor: (url) => apkUrls(url, Brand.dlBase, 'plus', _dlExtra),
@@ -697,6 +743,7 @@ class AppController {
       if (cached != null && !cached.isEmpty) {
         catalog.value = cached;
         status.value = SessionStatus.ready;
+        _scheduleGuide();
         unawaited(CatalogRepository.writeHome(cached, _homeKeys(), rules: homeRules, seriesNames: _resumeSeries()));
         if (cached.isStale) unawaited(_refreshInBackground());
         return;
@@ -758,6 +805,7 @@ class AppController {
       final fresh = await _fetchShared(account);
       if (fresh.isEmpty) return 'La playlist non contiene contenuti';
       catalog.value = fresh;
+      _scheduleGuide();
       return null;
     } on net.SourceException catch (e) {
       return e.message;
@@ -1109,7 +1157,7 @@ class AppController {
       final m = asMap(raw);
       final key = asString(m['key']);
       final played = key == null ? null : _findPlaying(key);
-      if (played == null) continue;
+      if (played == null || played.key.startsWith('trailer:')) continue; // un trailer non entra in «Continua a guardare»
       saveProgress(played, Duration(milliseconds: asInt(m['pos']) ?? 0), Duration(milliseconds: asInt(m['dur']) ?? 0), notify: false);
     }
     _playing = const <PlaybackItem>[];
@@ -1118,6 +1166,7 @@ class AppController {
     unawaited(_beat(true));
     _stats = const <String, Object?>{};
     await _resumeDeferred();
+    _scheduleGuide(); // rimandata o interrotta dalla visione: si richiede adesso
     return null;
   }
 
@@ -1553,18 +1602,80 @@ class AppController {
     });
   }
 
+  /// Guida di un canale: prima la risposta breve del server; se non dà un programma ancora in corso o futuro, la guida
+  /// XMLTV letta in sottofondo (del server, poi quella esterna), riconoscendo il canale per id della guida o per nome.
   Future<List<EpgEntry>> epgFor(MediaItem channel) async {
     final source = _source;
-    if (source == null || !source.supportsEpg) return const <EpgEntry>[];
+    if (source == null || !supportsEpg) return const <EpgEntry>[];
     final now = DateTime.now();
     final cached = _epgCache[channel.id];
     if (cached != null && now.difference(cached.$1) < const Duration(minutes: 5)) return cached.$2;
+    var list = const <EpgEntry>[];
+    if (source.supportsEpg) {
+      try {
+        list = await source.shortEpg(channel);
+      } on Object {
+        list = const <EpgEntry>[];
+      }
+    }
+    final live = list.any((e) => e.end == null || e.end!.isAfter(now));
+    if (!live && _guideSources.isNotEmpty) {
+      final rows = await NativeBridge.guideQuery(channel.epgId ?? '', channel.name);
+      final fromGuide = <EpgEntry>[
+        for (final m in rows)
+          if ((asString(m['t']) ?? '').isNotEmpty)
+            EpgEntry(
+              title: asString(m['t']) ?? '',
+              description: asString(m['d']),
+              start: DateTime.fromMillisecondsSinceEpoch(asInt(m['s']) ?? 0),
+              end: DateTime.fromMillisecondsSinceEpoch(asInt(m['e']) ?? 0),
+            ),
+      ];
+      if (fromGuide.isNotEmpty) list = fromGuide;
+    }
+    _epgCache[channel.id] = (now, list);
+    return list;
+  }
+
+  // ---------- trailer: quello della linea, altrimenti lo cerca il pannello (TMDB, YouTube, Apple) ----------
+  final Map<String, TrailerRef?> _trailers = {};
+
+  /// [lineValue]: il trailer che la linea mette nella scheda (codice o link di YouTube), se c'è. null = nessun trailer.
+  Future<TrailerRef?> trailerFor(MediaItem item, {String? year, String? lineValue}) async {
+    final line = (lineValue ?? '').trim();
+    if (line.isNotEmpty) return TrailerRef(yt: line, title: item.name);
+    final panel = _panel;
+    final title = item.name.trim();
+    if (panel == null || title.isEmpty) return null;
+    final kind = item.kind == MediaKind.series ? 'series' : 'movie';
+    final key = '$kind|$title|${year ?? ''}';
+    if (_trailers.containsKey(key)) return _trailers[key];
     try {
-      final list = await source.shortEpg(channel);
-      _epgCache[channel.id] = (now, list);
-      return list;
+      final server = panel.server.endsWith('/') ? panel.server.substring(0, panel.server.length - 1) : panel.server;
+      if (server.isEmpty) return null;
+      final uri = Uri.parse('$server/api/player/trailer').replace(queryParameters: <String, String>{
+        't': title.length > 160 ? title.substring(0, 160) : title,
+        'y': year ?? '',
+        'kind': kind,
+        'c': panel.identity.code,
+      });
+      final found = TrailerRef.fromPanel(asMap(await net.fetchJson(uri, timeout: const Duration(seconds: 14))));
+      if (_trailers.length > 60) _trailers.clear();
+      _trailers[key] = found;
+      return found;
     } on Object {
-      return const <EpgEntry>[];
+      return null; // pannello non raggiungibile: si riprova alla prossima apertura della scheda
+    }
+  }
+
+  /// Apre il trailer: YouTube dentro l'app, il file di Apple nel lettore (senza salvarne la posizione).
+  Future<void> openTrailer(TrailerRef trailer, String title) async {
+    final name = trailer.title.isEmpty ? title : trailer.title;
+    if (trailer.yt.isNotEmpty) {
+      stopPreview();
+      await NativeBridge.openTrailer(trailer.yt, name);
+    } else if (trailer.url.isNotEmpty) {
+      await play([PlaybackItem(key: 'trailer:${trailer.url.hashCode}', title: 'Trailer · $name', url: trailer.url)], 0);
     }
   }
 

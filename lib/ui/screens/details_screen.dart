@@ -30,7 +30,31 @@ class _DetailsScreenState extends State<DetailsScreen> {
   late final Future<SeriesDetails?> _series;
   int _seasonIndex = 0;
 
+  /// Trailer trovato (della linea o cercato dal pannello): il pulsante compare solo quando c'è.
+  TrailerRef? _trailer;
+
   bool get _isSeries => widget.item.kind == MediaKind.series;
+
+  /// Cerca il trailer in sottofondo, quando la scheda del server è arrivata (anche se è vuota).
+  Future<void> _findTrailer() async {
+    String? year = widget.item.year;
+    String? line;
+    try {
+      if (_isSeries) {
+        final d = await _series;
+        year ??= d?.year;
+        line = d?.trailer;
+      } else {
+        final d = await _movie;
+        year ??= d?.year;
+        line = d?.trailer;
+      }
+    } on Object {
+      line = null;
+    }
+    final found = await _app.trailerFor(widget.item, year: year, lineValue: line);
+    if (found != null && mounted) setState(() => _trailer = found);
+  }
 
   @override
   void initState() {
@@ -38,6 +62,7 @@ class _DetailsScreenState extends State<DetailsScreen> {
     _app = AppScope.of(context);
     _movie = _isSeries ? Future<MovieDetails?>.value(null) : _app.movieDetails(widget.item);
     _series = _isSeries ? _app.seriesDetails(widget.item) : Future<SeriesDetails?>.value(null);
+    _findTrailer();
   }
 
   @override
@@ -212,6 +237,14 @@ class _DetailsScreenState extends State<DetailsScreen> {
               onPressed: () => playItems(context, [_app.playbackForMovie(item)], 0),
             ));
           }
+        }
+        final trailer = _trailer;
+        if (trailer != null) {
+          buttons.add(TvButton(
+            icon: Icons.movie_outlined,
+            label: 'Trailer',
+            onPressed: () => _app.openTrailer(trailer, item.name),
+          ));
         }
         buttons.add(TvButton(
           icon: favorite ? Icons.check_rounded : Icons.add_rounded,

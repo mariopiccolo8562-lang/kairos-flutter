@@ -214,6 +214,41 @@ abstract final class NativeBridge {
     }
   }
 
+  /// Guida XMLTV di riserva (parte Android, Guide.kt): chiede di leggerla in sottofondo dalle [sources], in ordine, per i
+  /// [channels] (coppie: id della guida, nome). Risponde none | busy | fresh | wait | player | started; vuoto se non c'è.
+  static Future<String> guideBuild({
+    required List<String> sources,
+    required List<List<String>> channels,
+    required String ua,
+    bool force = false,
+  }) async {
+    try {
+      final r = await _channel.invokeMethod<Object?>('guideBuild', {'sources': sources, 'channels': channels, 'ua': ua, 'force': force});
+      return r?.toString() ?? '';
+    } on Object {
+      return '';
+    }
+  }
+
+  /// Programmi da adesso in poi di un canale, dalla guida XMLTV già letta (vuoto se non c'è): t, d, s, e (millisecondi).
+  static Future<List<Map<String, dynamic>>> guideQuery(String epg, String name, {int limit = 4}) async {
+    try {
+      final r = await _channel.invokeMethod<Object?>('guideQuery', {'epg': epg, 'name': name, 'limit': limit});
+      return [for (final raw in asList(r)) asMap(raw)];
+    } on Object {
+      return const <Map<String, dynamic>>[];
+    }
+  }
+
+  /// Trailer di YouTube dentro l'app ([yt]: codice o link del video). false se il video non è valido.
+  static Future<bool> openTrailer(String yt, String title) async {
+    try {
+      return (await _channel.invokeMethod<Object?>('trailer', {'yt': yt, 'title': title})) == true;
+    } on Object {
+      return false;
+    }
+  }
+
   /// Fa partire un canale nel riquadro dell'anteprima ([data]: key, url, alt, x, y, w, h, ua, playerClass).
   static Future<void> previewShow(Map<String, Object?> data) async {
     _listen();
