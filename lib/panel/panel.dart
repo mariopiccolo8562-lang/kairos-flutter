@@ -5,6 +5,7 @@ import '../core/json.dart';
 import '../core/net.dart';
 import '../data/models.dart';
 import '../data/sources/xtream_source.dart';
+import 'portals.dart';
 
 /// Indirizzo del pannello Kairos (lo stesso di Kairos Pro, Kairos TV e Kairos Lite).
 /// Il pannello può indicarne uno nuovo (Impostazioni → server): l'app lo ricorda.
@@ -59,6 +60,10 @@ class PanelPlaylist {
     this.host = '',
     this.username = '',
     this.password = '',
+    this.alts = const [],
+    this.altNames = const [],
+    this.mainName = '',
+    this.mode = 'auto',
   });
 
   final String id;
@@ -68,6 +73,10 @@ class PanelPlaylist {
   final String host;
   final String username;
   final String password;
+  final List<String> alts;
+  final List<String> altNames;
+  final String mainName;
+  final String mode;
 
   bool get isXtream => type == 'xtream' && host.isNotEmpty && username.isNotEmpty;
 
@@ -81,22 +90,29 @@ class PanelPlaylist {
       host: asString(m['host']) ?? '',
       username: asString(m['username']) ?? '',
       password: asString(m['password']) ?? '',
+      alts: [for (final value in asList(m['alts'])) if (asString(value) case final String host) host],
+      altNames: [for (final value in asList(m['altNames'])) if (asString(value) case final String name) name],
+      mainName: asString(m['mainName']) ?? '',
+      mode: const {'auto', 'main', 'alt', 'rot'}.contains(asString(m['mode'])) ? asString(m['mode'])! : 'auto',
     );
   }
 
   /// Account da usare per scaricare i contenuti. Un link M3U di un server Xtream
   /// (get.php?username=…) diventa un account Xtream: categorie e guida TV più ricche.
-  Account? toAccount() {
+  Account? toAccount({String? portalHost}) {
     if (isXtream) {
       return Account(
         type: AccountType.xtream,
-        server: XtreamSource.normalizeServer(host),
+        server: XtreamSource.normalizeServer(portalHost ?? host),
         username: username,
         password: password,
       );
     }
-    final link = _fixUrl(url);
+    var link = _fixUrl(url);
     if (link.isEmpty) return null;
+    if (portalHost != null && PortalRotation.isXtreamGetUrl(link)) {
+      link = PortalRotation.replaceOrigin(link, portalHost);
+    }
     return XtreamSource.accountFromM3uUrl(link) ?? Account(type: AccountType.m3u, m3uUrl: link);
   }
 

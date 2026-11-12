@@ -17,6 +17,7 @@ import '../data/quality_box.dart';
 import '../data/sources/content_source.dart';
 import '../data/user_store.dart';
 import '../panel/panel.dart';
+import '../panel/portals.dart';
 import '../ui/widgets/net_image.dart';
 import 'app_updater.dart';
 import 'remote_quiet.dart';
@@ -656,6 +657,50 @@ class AppController {
     return find(s.account?.plDefault ?? '') ?? all.first;
   }
 
+  Future<String> _portalHost(PanelPlaylist pl) async {
+    final candidates = PortalRotation.candidates(host: pl.host, url: pl.url, alts: pl.alts);
+    return PortalRotation.select(
+      mode: pl.mode,
+      candidates: candidates,
+      code: deviceCode,
+      savedChoice: await _store.loadPortalChoice(pl.id),
+      badUntil: await _store.loadPortalBadUntil(pl.id),
+    );
+  }
+
+  Future<String?> _nextPortalHost(PanelPlaylist pl) async {
+    final candidates = PortalRotation.candidates(host: pl.host, url: pl.url, alts: pl.alts);
+    if (candidates.length <= 1 || (pl.mode != 'auto' && pl.mode != 'rot')) return null;
+    final current = _account?.server ?? await _portalHost(pl);
+    final bad = await _store.loadPortalBadUntil(pl.id);
+    bad[PortalRotation.hostKey(current)] = DateTime.now().add(const Duration(minutes: 30)).millisecondsSinceEpoch;
+    await _store.savePortalBadUntil(pl.id, bad);
+    final next = PortalRotation.next(
+      mode: pl.mode,
+      candidates: candidates,
+      code: deviceCode,
+      current: current,
+      badUntil: bad,
+    );
+    if (next == null) return null;
+    await _store.savePortalChoice(pl.id, next);
+    return next;
+  }
+
+  Future<void> _markPortalHostsBad(PanelPlaylist pl, Iterable<String> hosts) async {
+    final bad = await _store.loadPortalBadUntil(pl.id);
+    final until = DateTime.now().add(const Duration(minutes: 30)).millisecondsSinceEpoch;
+    final candidates = {
+      for (final candidate in PortalRotation.candidates(host: pl.host, url: pl.url, alts: pl.alts))
+        PortalRotation.hostKey(candidate),
+    };
+    for (final host in hosts) {
+      final key = PortalRotation.hostKey(host);
+      if (key.isNotEmpty && candidates.contains(key)) bad[key] = until;
+    }
+    await _store.savePortalBadUntil(pl.id, bad);
+  }
+
   Future<void> choosePlaylist(String id) async {
     _playlistChoice = id;
     await _store.savePlaylistChoice(id);
@@ -668,7 +713,8 @@ class AppController {
     _applyPerms(s);
     panelState.value = s;
     final pl = _choosePlaylist(s);
-    final account = pl?.toAccount();
+    final portalHost = pl == null ? null : await _portalHost(pl);
+    final account = pl?.toAccount(portalHost: portalHost);
     if (pl == null || account == null) {
       startupError = 'Nessuna playlist assegnata a questo dispositivo: chiedi al tuo fornitore di aggiungerla dal pannello.';
       status.value = SessionStatus.error;
@@ -752,17 +798,34 @@ class AppController {
   }
 
   Future<String?> _fetchAndApply() async {
-    final account = _account;
-    if (account == null) return 'Nessuna playlist configurata';
-    try {
-      final fresh = await _fetchShared(account);
-      if (fresh.isEmpty) return 'La playlist non contiene contenuti';
-      catalog.value = fresh;
-      return null;
-    } on net.SourceException catch (e) {
-      return e.message;
-    } on Object catch (e) {
-      return 'Errore inatteso: $e';
+    final initialAccount = _account;
+    if (initialAccount == null) return 'Nessuna playlist configurata';
+    var account = initialAccount;
+    final pl = _playlist;
+    var attempts = 0;
+    while (true) {
+      try {
+        final fresh = await _fetchShared(account);
+        if (fresh.isEmpty) return 'La playlist non contiene contenuti';
+        catalog.value = fresh;
+        return null;
+      } on net.SourceException catch (e) {
+        final message = e.message.toLowerCase();
+        final candidates = pl == null ? const <String>[] : PortalRotation.candidates(host: pl.host, url: pl.url, alts: pl.alts);
+        if (pl == null ||
+            account.type != AccountType.xtream ||
+            attempts >= candidates.length - 1 ||
+            !['rete', 'connessione', 'raggiungibile', 'timeout', 'non risponde'].any(message.contains)) {
+          return e.message;
+        }
+        final next = await _nextPortalHost(pl);
+        if (next == null) return e.message;
+        account = pl.toAccount(portalHost: next) ?? account;
+        _useAccount(account);
+        attempts++;
+      } on Object catch (e) {
+        return 'Errore inatteso: $e';
+      }
     }
   }
 
@@ -829,6 +892,8 @@ class AppController {
   bool _playerVisible = false;
   _Watch? _watching;
   List<PlaybackItem> _playing = const <PlaybackItem>[];
+  String? _currentPlaybackKey;
+  bool _portalFailoverBusy = false;
   int _lastBeat = -1;
   int _lastRegister = 0;
   String _lastSig = '';
@@ -1012,6 +1077,19 @@ class AppController {
     }
     final s = _state;
     if (s == null) return;
+    final sat = [for (final value in asList(j['sat'])) if (asString(value) case final String host) host];
+    final pl = _playlist;
+    if (sat.isNotEmpty && pl != null) {
+      await _markPortalHostsBad(pl, sat);
+      final selected = await _portalHost(pl);
+      if (selected.isNotEmpty &&
+          PortalRotation.hostKey(selected) !=
+              PortalRotation.hostKey(_account?.server ?? '')) {
+        await _store.savePortalChoice(pl.id, selected);
+        await _applyState(s);
+        await _replacePlayerPortalUrls(pl, host: selected, advance: false);
+      }
+    }
     var changed = false;
     final acc = s.account;
     final ms = asInt(j['ms']);
@@ -1072,6 +1150,8 @@ class AppController {
     _previewSeq++;
     preview.value = const PreviewState.idle();
     _playing = items;
+    _currentPlaybackKey = item.key;
+    _portalFailoverBusy = false;
     _watching = _Watch.of(item);
     _playerVisible = true;
     _onWatchStart();
@@ -1099,6 +1179,7 @@ class AppController {
       _watching = null;
       _playerVisible = false;
       _inPlayer = false;
+      _currentPlaybackKey = null;
       _pinAskAfterView();
       // di solito l'interfaccia torna visibile subito; se invece l'app è finita in sfondo lo si dice al pannello
       Timer(const Duration(seconds: 2), _visibilityChanged);
@@ -1128,7 +1209,41 @@ class AppController {
     return null;
   }
 
+  void _onPortalPlayerError(PlayerEvent event) {
+    final code = asInt(event.data['code']) ?? 0;
+    if (code < 2001 || code > 2004 || _portalFailoverBusy) return;
+    final pl = _playlist;
+    final item = _findPlaying(event.key);
+    if (pl == null || item == null || _account?.type != AccountType.xtream) return;
+    final host = PortalRotation.hostKey(PortalRotation.originOf(item.url));
+    final candidates = PortalRotation.candidates(host: pl.host, url: pl.url, alts: pl.alts);
+    if (!candidates.any((candidate) => PortalRotation.hostKey(candidate) == host)) return;
+    unawaited(_replacePlayerPortalUrls(pl));
+  }
+
+  Future<void> _replacePlayerPortalUrls(PanelPlaylist pl, {String? host, bool advance = true}) async {
+    if (_portalFailoverBusy || _watching == null || _currentPlaybackKey == null) return;
+    final item = _findPlaying(_currentPlaybackKey!);
+    if (item == null) return;
+    _portalFailoverBusy = true;
+    try {
+      final selected = host ?? (advance ? await _nextPortalHost(pl) : _account?.server);
+      if (selected == null || selected.isEmpty) return;
+      final account = pl.toAccount(portalHost: selected);
+      if (account == null) return;
+      _useAccount(account);
+      final urls = <String>[
+        currentUrl(item.url),
+        for (final url in item.altUrls) currentUrl(url),
+      ].where((url) => url.isNotEmpty).toSet().toList();
+      if (urls.isNotEmpty) await NativeBridge.replacePlayerUrls(item.key, urls);
+    } finally {
+      _portalFailoverBusy = false;
+    }
+  }
+
   void _onPlayerEvent(PlayerEvent e) {
+    if (e.type == 'error') _onPortalPlayerError(e);
     final stats = e.stats;
     if (stats.isNotEmpty) _stats = stats;
     switch (e.type) {
@@ -1136,6 +1251,7 @@ class AppController {
         {
           final item = _findPlaying(e.key);
           if (item != null) {
+            _currentPlaybackKey = item.key;
             _watching = _Watch.of(item);
             unawaited(_beat(true));
           }

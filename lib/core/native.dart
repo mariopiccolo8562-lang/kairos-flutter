@@ -259,6 +259,14 @@ abstract final class NativeBridge {
     }
   }
 
+  static Future<bool> replacePlayerUrls(String key, List<String> urls) async {
+    try {
+      return await _channel.invokeMethod<bool>('playerUrls', {'key': key, 'urls': urls}) ?? false;
+    } on Object {
+      return false;
+    }
+  }
+
   /// Riquadro della qualità cambiato dal pannello con il lettore aperto ([box]: `resInd`, `resTag`, come all'apertura):
   /// true se il lettore aperto l'ha ricevuto.
   static Future<bool> playerBox(Map<String, bool> box) async {

@@ -90,6 +90,12 @@ class MainActivity : FlutterActivity() {
                 }
                 // riquadro della qualità cambiato dal pannello durante la visione (permesso «resInd», voce «qbox»)
                 "playerBox" -> result.success((call.arguments as? String)?.let { PlayerActivity.boxCurrent(it) } ?: false)
+                "playerUrls" -> result.success(
+                    PlayerActivity.replaceCurrentUrls(
+                        call.argument<String>("key") ?: "",
+                        call.argument<List<String>>("urls") ?: emptyList(),
+                    ),
+                )
                 // aggiornamento dell'app: stato, scaricamento in background, installazione (vedi Updater.kt)
                 "updateStatus" -> {
                     // la verifica dell'APK già scaricato legge tutto il file: mai sul thread principale (scatti, ANR)
