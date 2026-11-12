@@ -230,6 +230,15 @@ abstract final class NativeBridge {
     }
   }
 
+  /// Dopo la visione: fa ripartire la lettura della guida rimasta in sospeso (il lettore la interrompe).
+  static Future<void> guideResume() async {
+    try {
+      await _channel.invokeMethod<Object?>('guideResume');
+    } on Object {
+      // parte Android non disponibile: niente da riprendere
+    }
+  }
+
   /// Programmi da adesso in poi di un canale, dalla guida XMLTV già letta (vuoto se non c'è): t, d, s, e (millisecondi).
   static Future<List<Map<String, dynamic>>> guideQuery(String epg, String name, {int limit = 4}) async {
     try {

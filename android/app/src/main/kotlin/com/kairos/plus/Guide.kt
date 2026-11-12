@@ -53,6 +53,16 @@ object Guide {
 
     private enum class Out { DONE, ABORTED, FAILED }
 
+    /** richiesta rimandata o interrotta dal lettore: si riprende alla chiusura della visione, senza richiedere tutto a Flutter */
+    private class Request(val sources: List<String>, val channels: List<Pair<String, String>>, val ua: String)
+    @Volatile private var pending: Request? = null
+
+    /** dopo la visione: riparte la lettura rimasta in sospeso (none se non ce n'era) */
+    fun resume(c: Context): String {
+        val r = pending ?: return "none"
+        return build(c, r.sources, r.channels, r.ua, false)
+    }
+
     /** chiavi con cui un canale è salvato nell'archivio: id della guida e nome «pulito» */
     fun keys(epg: String, name: String): List<String> = buildList(2) {
         epg.trim().lowercase(Locale.ROOT).takeIf { it.isNotEmpty() }?.let { add("id:$it") }
@@ -78,7 +88,7 @@ object Guide {
         val urls = sources.map { it.trim() }.filter { it.startsWith("http://", true) || it.startsWith("https://", true) }.distinct().take(4)
         if (urls.isEmpty() || channels.isEmpty()) return "none"
         if (running) return "busy"
-        if (PlayerActivity.isOpen()) return "player"
+        if (PlayerActivity.isOpen()) { pending = Request(urls, channels, ua); return "player" }
         val sig = signature(urls, channels)
         val now = System.currentTimeMillis()
         val p = prefs(app)
@@ -88,9 +98,9 @@ object Guide {
         worker.execute {
             try {
                 when (readAll(app, urls, channels, ua)) {
-                    Out.DONE -> { failedSig = ""; p.edit().putString("sig", sig).putLong("at", System.currentTimeMillis()).apply() }
-                    Out.FAILED -> { failedSig = sig; retryAt = System.currentTimeMillis() + RETRY_MS }
-                    Out.ABORTED -> {}
+                    Out.DONE -> { pending = null; failedSig = ""; p.edit().putString("sig", sig).putLong("at", System.currentTimeMillis()).apply() }
+                    Out.FAILED -> { pending = null; failedSig = sig; retryAt = System.currentTimeMillis() + RETRY_MS }
+                    Out.ABORTED -> pending = Request(urls, channels, ua)
                 }
             } catch (_: Throwable) {
                 failedSig = sig; retryAt = System.currentTimeMillis() + RETRY_MS

@@ -1166,7 +1166,8 @@ class AppController {
     unawaited(_beat(true));
     _stats = const <String, Object?>{};
     await _resumeDeferred();
-    _scheduleGuide(); // rimandata o interrotta dalla visione: si richiede adesso
+    unawaited(NativeBridge.guideResume()); // guida XMLTV interrotta dalla visione: riparte da sola
+    _scheduleGuide();
     return null;
   }
 

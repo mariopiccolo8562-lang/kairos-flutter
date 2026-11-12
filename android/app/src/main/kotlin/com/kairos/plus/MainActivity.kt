@@ -142,6 +142,7 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 "guideBuiltAt" -> result.success(Guide.builtAt(applicationContext))
+                "guideResume" -> result.success(try { Guide.resume(applicationContext) } catch (_: Throwable) { "error" })
                 // trailer di YouTube dentro l'app (TrailerActivity, in un processo a parte)
                 "trailer" -> {
                     val id = Yt.id(call.argument<String>("yt") ?: "")
