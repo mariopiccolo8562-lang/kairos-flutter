@@ -100,7 +100,7 @@ object Guide {
                 when (readAll(app, urls, channels, ua)) {
                     Out.DONE -> { pending = null; failedSig = ""; p.edit().putString("sig", sig).putLong("at", System.currentTimeMillis()).apply() }
                     Out.FAILED -> { pending = null; failedSig = sig; retryAt = System.currentTimeMillis() + RETRY_MS }
-                    Out.ABORTED -> pending = Request(urls, channels, ua)
+                    Out.ABORTED -> { pending = Request(urls, channels, ua) }
                 }
             } catch (_: Throwable) {
                 failedSig = sig; retryAt = System.currentTimeMillis() + RETRY_MS
