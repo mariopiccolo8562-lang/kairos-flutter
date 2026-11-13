@@ -31,6 +31,40 @@ class MainActivity : FlutterActivity() {
     /** link di riserva dell'APK decisi da Flutter (stesso APK sulle basi successive, poi GitHub): solo https */
     private fun alts(call: MethodCall): List<String> =
         (call.argument<List<Any?>>("alts") ?: emptyList()).mapNotNull { it as? String }.filter { it.startsWith("https://") }
+    /** rete del dispositivo per «Online ora» del pannello: tipo (wifi, eth, mobile, none) e segnale Wi-Fi in dBm (13 novembre 2026) */
+    private fun netInfo(): Map<String, Any> {
+        val out = HashMap<String, Any>()
+        var type = "none"
+        try {
+            val cm = getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager
+            if (android.os.Build.VERSION.SDK_INT >= 23) {
+                val c = cm.activeNetwork?.let { cm.getNetworkCapabilities(it) }
+                if (c != null) type = when {
+                    c.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) -> "eth"
+                    c.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+                    c.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> "mobile"
+                    else -> ""
+                }
+            } else {
+                @Suppress("DEPRECATION") val ni = cm.activeNetworkInfo
+                @Suppress("DEPRECATION")
+                if (ni != null && ni.isConnected) type = when (ni.type) {
+                    android.net.ConnectivityManager.TYPE_ETHERNET -> "eth"
+                    android.net.ConnectivityManager.TYPE_WIFI -> "wifi"
+                    android.net.ConnectivityManager.TYPE_MOBILE -> "mobile"
+                    else -> ""
+                }
+            }
+            if (type == "wifi") {
+                val wm = applicationContext.getSystemService(android.content.Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+                @Suppress("DEPRECATION") val wi = wm.connectionInfo
+                if (wi != null && wi.rssi in -126..-1) out["rssi"] = wi.rssi
+            }
+        } catch (_: Throwable) { }
+        out["type"] = type
+        return out
+    }
+
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         Quiet.watch(application) // Android 12+: aggiornamento senza conferma quando il cliente esce dall'app
@@ -39,6 +73,7 @@ class MainActivity : FlutterActivity() {
         channel = ch
         ch.setMethodCallHandler { call, result ->
             when (call.method) {
+                "netInfo" -> result.success(netInfo())
                 "device" -> result.success(deviceInfo())
                 "openInstallPerm" -> {
                     val ok = android.os.Build.VERSION.SDK_INT < 26 || packageManager.canRequestPackageInstalls()

@@ -1026,6 +1026,7 @@ class AppController {
       final panel = _panel;
       if (_visible || s == null || !s.active || panel == null) return;
       await panel.heartbeat(
+        net: await NativeBridge.netInfo(),
         state: 'idle',
         screen: 'home',
         kickAck: _kickAck,
@@ -1061,6 +1062,7 @@ class AppController {
       }
       await _readDns();
       final call = panel.heartbeat(
+        net: await NativeBridge.netInfo(),
         sdns: _dnsWanted ? _dns : '',
         state: w?.state ?? 'idle',
         title: w?.title ?? '',

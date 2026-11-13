@@ -373,6 +373,7 @@ class PanelClient {
     Map<String, Object?> stats = const {},
     bool vis = true,
     String sdns = '',
+    Map<String, Object?> net = const {},
   }) async {
     try {
       final r = await _post('/api/player/heartbeat', {
@@ -389,7 +390,7 @@ class PanelClient {
         'ui': '',
         'model': model,
         'screen': screen.length > 20 ? screen.substring(0, 20) : screen,
-        'net': {'type': asString(stats['net']) ?? ''},
+        'net': {'type': asString(net['type']) ?? asString(stats['net']) ?? '', if (net['rssi'] is int) 'rssi': net['rssi']},
         'vpn': 'off',
         if (sdns.isNotEmpty) 'sdns': sdns, // DNS cifrato: stato, solo se il pannello lo ha acceso
         'cfg': cfg, // controllo remoto: impostazioni attuali dell'app

@@ -102,6 +102,15 @@ abstract final class NativeBridge {
     }
   }
 
+  /// Rete del dispositivo per «Online ora» del pannello: {type: wifi|eth|mobile|none, rssi: dBm (solo Wi-Fi)}.
+  static Future<Map<String, dynamic>> netInfo() async {
+    try {
+      return asMap(await _channel.invokeMethod<Object?>('netInfo'));
+    } on Object {
+      return const <String, dynamic>{};
+    }
+  }
+
   /// Stato attuale del DNS cifrato (vedi [dns]).
   static Future<String> dnsState() async {
     try {
