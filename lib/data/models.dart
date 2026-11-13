@@ -460,6 +460,8 @@ class Catalog {
     this.partial = false,
   });
 
+  static List<MediaItem> _noSep(List<MediaItem> l) => l.any((x) => isSepName(x.name)) ? l.where((x) => !isSepName(x.name)).toList() : l;
+
   factory Catalog.build({
     required List<Category> liveCategories,
     required List<Category> movieCategories,
@@ -470,6 +472,9 @@ class Catalog {
     required int fetchedAt,
     bool partial = false,
   }) {
+    live = _noSep(live);
+    movies = _noSep(movies);
+    series = _noSep(series);
     final liveGroups = _group(live);
     final movieGroups = _group(movies);
     final seriesGroups = _group(series);
@@ -737,4 +742,16 @@ class Catalog {
   }
 
   static List<String> _searchKeys(List<MediaItem> items) => [for (final i in items) i.name.toLowerCase()];
+}
+
+/// Titoli «----NOME----», «##### SPORT #####», «★★★ CINEMA ★★★»: separatori del fornitore, non canali né film né
+/// serie (non si aprono) → non si mostrano. Stessa regola di Kairos Pro; «...E giustizia per tutti» resta.
+final RegExp _rxSep = RegExp(r'^[\s\-—=#*_~▬═━─•●◆★☆✦|+<>]{3,}|^[\s\-—=#*_~▬═━─•●◆★☆✦|+<>.:]{2,}.*[\-—=#*_~▬═━─•●◆★☆✦|+<>]{2,}\s*$');
+final RegExp _rxSep4 = RegExp(r'[\-—=#▬═━─_*~]{4,}');
+final RegExp _rxAlnum = RegExp(r'[\p{L}\p{N}]', unicode: true);
+bool isSepName(String raw) {
+  final n = raw.trim();
+  if (n.isEmpty) return true;
+  if (_rxSep4.hasMatch(n)) return true;
+  return _rxSep.hasMatch(n) && _rxAlnum.allMatches(n).length < n.length * 0.85;
 }
