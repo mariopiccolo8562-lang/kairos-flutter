@@ -425,8 +425,10 @@ class AppController {
       final (rc, rcv) = savedRemote;
       try {
         _rc = rc.isEmpty ? const <String, dynamic>{} : asMap(jsonDecode(rc));
+        hideSepNames = _rc['o.sep']?.toString() != 'off';
       } on FormatException {
         _rc = const <String, dynamic>{};
+        hideSepNames = _rc['o.sep']?.toString() != 'off';
       }
       _rcv = rcv;
     }
@@ -1425,6 +1427,7 @@ class AppController {
     final before = Perf.lite;
     final previewBefore = previewEnabled;
     _rc = next;
+    hideSepNames = _rc['o.sep']?.toString() != 'off';
     _rcv = rcv;
     unawaited(_syncDns()); // voce «sdns» accesa o spenta dal pannello
     unawaited(_syncPlayerBox()); // voce «qbox» cambiata durante la visione

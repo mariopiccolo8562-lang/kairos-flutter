@@ -40,7 +40,11 @@ abstract final class CatalogRepository {
     final agent = net.userAgent;
     final keys = favorites.toList();
     final names = Set<String>.of(seriesNames);
-    return Isolate.run(() => _fetchAndStore(account, path, homePath, agent, keys, homeTop, homeHide, hideAdult, names));
+    final hs = hideSepNames;
+    return Isolate.run(() {
+      hideSepNames = hs; // l'isolato non vede le variabili dell'app
+      return _fetchAndStore(account, path, homePath, agent, keys, homeTop, homeHide, hideAdult, names);
+    });
   }
 
   static Future<Catalog?> readCache() async {

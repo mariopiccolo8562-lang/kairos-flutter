@@ -460,7 +460,7 @@ class Catalog {
     this.partial = false,
   });
 
-  static List<MediaItem> _noSep(List<MediaItem> l) => l.any((x) => isSepName(x.name)) ? l.where((x) => !isSepName(x.name)).toList() : l;
+  static List<MediaItem> _noSep(List<MediaItem> l) => !hideSepNames ? l : l.any((x) => isSepName(x.name)) ? l.where((x) => !isSepName(x.name)).toList() : l;
 
   factory Catalog.build({
     required List<Category> liveCategories,
@@ -749,6 +749,8 @@ class Catalog {
 final RegExp _rxSep = RegExp(r'^[\s\-—=#*_~▬═━─•●◆★☆✦|+<>]{3,}|^[\s\-—=#*_~▬═━─•●◆★☆✦|+<>.:]{2,}.*[\-—=#*_~▬═━─•●◆★☆✦|+<>]{2,}\s*$');
 final RegExp _rxSep4 = RegExp(r'[\-—=#▬═━─_*~]{4,}');
 final RegExp _rxAlnum = RegExp(r'[\p{L}\p{N}]', unicode: true);
+/// voce «o.sep» del pannello (off = i separatori si vedono); la imposta AppController e arriva negli isolati con il lavoro
+bool hideSepNames = true;
 bool isSepName(String raw) {
   final n = raw.trim();
   if (n.isEmpty) return true;
