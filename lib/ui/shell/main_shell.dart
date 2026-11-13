@@ -7,6 +7,7 @@ import '../../app/app_scope.dart';
 import '../../app/brand.dart';
 import '../../app/perf.dart';
 import '../../app/theme.dart';
+import '../../core/dns_badge.dart';
 import '../../data/models.dart';
 import '../../state/app_controller.dart';
 import '../navigation.dart';
@@ -366,11 +367,60 @@ class _NavRail extends StatelessWidget {
                   showLabel: showLabels,
                   onSelect: () => onSelect(tab),
                 ),
-              const Spacer(flex: 2),
+              // in fondo: lucchetto del DNS cifrato (solo se il fornitore lo ha acceso); le voci restano dove sono
+              Expanded(
+                flex: 2,
+                child: Align(alignment: Alignment.bottomLeft, child: _DnsLock(showLabel: showLabels)),
+              ),
             ],
           );
         },
       ),
+    );
+  }
+}
+
+/// Lucchetto del DNS cifrato in fondo alla barra: verde = attivo, giallo = non partito, tenue = in avvio.
+/// Non si seleziona: è un indicatore (a barra aperta c'è anche la frase).
+class _DnsLock extends StatelessWidget {
+  const _DnsLock({required this.showLabel});
+
+  final bool showLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<String>(
+      valueListenable: AppScope.of(context).dnsBadge,
+      builder: (context, state, _) {
+        if (state.isEmpty) return const SizedBox.shrink();
+        final color = Color(DnsBadge.color(state));
+        return Padding(
+          padding: const EdgeInsets.only(left: 27, right: 12, bottom: 20),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                DnsBadge.on(state) ? Icons.lock_rounded : Icons.lock_open_rounded,
+                size: 18,
+                color: color,
+                semanticLabel: DnsBadge.text(state),
+              ),
+              if (showLabel) ...[
+                const SizedBox(width: 15),
+                Flexible(
+                  child: Text(
+                    DnsBadge.text(state),
+                    maxLines: 1,
+                    softWrap: false,
+                    overflow: TextOverflow.fade,
+                    style: TextStyle(fontSize: 12, height: 1.2, fontWeight: FontWeight.w600, color: color),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
     );
   }
 }

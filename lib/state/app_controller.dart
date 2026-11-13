@@ -6,6 +6,7 @@ import 'package:flutter/widgets.dart';
 
 import '../app/brand.dart';
 import '../app/perf.dart';
+import '../core/dns_badge.dart';
 import '../core/json.dart';
 import '../core/native.dart';
 import '../core/net.dart' as net;
@@ -546,9 +547,26 @@ class AppController {
   String _dns = '';
   bool get _dnsWanted => _rc['sdns']?.toString() == 'on';
 
+  /// Stato per il lucchetto nella barra laterale (vuoto = niente lucchetto): vedi [DnsBadge].
+  final ValueNotifier<String> dnsBadge = ValueNotifier('');
+
   Future<void> _syncDns([bool? active]) async {
     final on = _dnsWanted && (active ?? _state?.active ?? false);
     _dns = await NativeBridge.dns(on);
+    if (_disposed) return;
+    dnsBadge.value = DnsBadge.state(on, _dns);
+    if (!on) return;
+    // l'avvio (e la richiesta di Android, la prima volta) dura qualche secondo: il lucchetto si aggiorna da solo
+    for (final ms in const [1500, 4000, 9000]) {
+      unawaited(Future<void>.delayed(Duration(milliseconds: ms), _readDns));
+    }
+  }
+
+  Future<void> _readDns() async {
+    if (_disposed || !_dnsWanted) return;
+    _dns = await NativeBridge.dnsState();
+    if (_disposed) return;
+    dnsBadge.value = DnsBadge.state(_state?.active ?? false, _dns);
   }
 
   Future<void> _onRegistered(PanelState s) async {
@@ -1003,7 +1021,7 @@ class AppController {
         await hidden;
         if (!_visible) return 0;
       }
-      if (_dnsWanted) _dns = await NativeBridge.dnsState();
+      await _readDns();
       final call = panel.heartbeat(
         sdns: _dnsWanted ? _dns : '',
         state: w?.state ?? 'idle',
@@ -1693,6 +1711,7 @@ class AppController {
     panelState.dispose();
     catalog.dispose();
     liveFormat.dispose();
+    dnsBadge.dispose();
     favoritesRevision.dispose();
     progressRevision.dispose();
     remoteCmd.dispose();
