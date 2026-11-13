@@ -69,7 +69,7 @@ class _HomePageState extends State<HomePage> {
             HeroHeader(data: _hero),
             Expanded(
               child: ListenableBuilder(
-                listenable: Listenable.merge([app.favoritesRevision, app.progressRevision]),
+                listenable: Listenable.merge([app.favoritesRevision, app.progressRevision, app.trendRevision]),
                 builder: (context, child) => _rows(app, catalog),
               ),
             ),
@@ -208,6 +208,18 @@ class _HomePageState extends State<HomePage> {
         final prefix = kind == MediaKind.movie ? 'film' : 'serie';
         addPosterRow('$prefix:${category.id}', category.name, catalog.inCategory(kind, category.id));
       }
+    }
+
+    // di tendenza questa settimana (classifica del pannello), solo i titoli che la linea ha, senza le categorie nascoste
+    if (app.trendRows) {
+      addPosterRow('tendenza-film', 'Film di tendenza questa settimana', [
+        for (final item in app.trending(catalog, MediaKind.movie))
+          if (!hiddenMovies.contains(item.categoryId)) item,
+      ]);
+      addPosterRow('tendenza-serie', 'Serie di tendenza questa settimana', [
+        for (final item in app.trending(catalog, MediaKind.series))
+          if (!hiddenSeries.contains(item.categoryId)) item,
+      ]);
     }
 
     addPosterRow('lista', 'La mia lista', [

@@ -4,6 +4,7 @@ import 'dart:math';
 import '../core/json.dart';
 import '../core/net.dart';
 import '../data/models.dart';
+import '../data/trend_match.dart';
 import '../data/sources/xtream_source.dart';
 
 /// Indirizzo del pannello Kairos (lo stesso di Kairos Pro, Kairos TV e Kairos Lite).
@@ -428,6 +429,18 @@ class PanelClient {
       if (j['ok'] == false) return asString(j['error']) ?? 'Limite di visioni contemporanee raggiunto';
       if (r.status == 403) return asString(j['error']);
       return null;
+    } on Object {
+      return null;
+    }
+  }
+
+  /// Classifica dei titoli di tendenza della settimana (/api/player/trending); null se non arriva.
+  Future<TrendList?> trending() async {
+    if (_base.isEmpty) return null;
+    try {
+      final text = await fetchText(Uri.parse('$_base/api/player/trending'), timeout: const Duration(seconds: 8));
+      if (text.length > 200000) return null;
+      return TrendList.parse(jsonDecode(text));
     } on Object {
       return null;
     }

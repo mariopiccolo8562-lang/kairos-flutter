@@ -15,6 +15,7 @@ import '../data/catalog_repository.dart';
 import '../data/home_rules.dart';
 import '../data/models.dart';
 import '../data/quality_box.dart';
+import '../data/trend_match.dart';
 import '../data/sources/content_source.dart';
 import '../data/user_store.dart';
 import '../panel/panel.dart';
@@ -90,6 +91,40 @@ class AppController {
   final ValueNotifier<Catalog?> catalog = ValueNotifier(null);
   final ValueNotifier<String> liveFormat = ValueNotifier('ts');
   final ValueNotifier<int> favoritesRevision = ValueNotifier(0);
+
+  /// Classifica di tendenza arrivata (o cambiata): la Home rifà le righe «di tendenza» (13 novembre 2026).
+  final ValueNotifier<int> trendRevision = ValueNotifier(0);
+  TrendList _trend = TrendList.empty;
+  int _trendAt = 0;
+  Catalog? _trendCatalog;
+  List<MediaItem> _trendMovies = const <MediaItem>[];
+  List<MediaItem> _trendSeries = const <MediaItem>[];
+
+  /// Righe «di tendenza» nella Home: spente dal pannello con la voce «o.homeArt».
+  bool get trendRows => _rc['o.homeArt']?.toString() != 'off';
+
+  /// Titoli di tendenza della settimana che la linea ha davvero, nell'ordine della classifica.
+  List<MediaItem> trending(Catalog catalog, MediaKind kind) {
+    if (!identical(_trendCatalog, catalog)) {
+      _trendCatalog = catalog;
+      _trendMovies = matchTrend(_trend.movies, catalog.movies, limit: 20);
+      _trendSeries = matchTrend(_trend.series, catalog.series, limit: 20);
+    }
+    return kind == MediaKind.series ? _trendSeries : _trendMovies;
+  }
+
+  /// Si riscarica al più ogni 6 ore (senza risposta si riprova al prossimo avvio o alla prossima apertura).
+  Future<void> _loadTrend() async {
+    final panel = _panel;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (panel == null || now - _trendAt < 6 * 3600 * 1000) return;
+    _trendAt = now;
+    final t = await panel.trending();
+    if (_disposed || t == null || t.isEmpty) return;
+    _trend = t;
+    _trendCatalog = null;
+    trendRevision.value++;
+  }
   final ValueNotifier<int> progressRevision = ValueNotifier(0);
 
   /// Anteprima del canale nel riquadro (TV in diretta).
@@ -570,6 +605,7 @@ class AppController {
   }
 
   Future<void> _onRegistered(PanelState s) async {
+    unawaited(_loadTrend());
     if (s.raw.containsKey('rc')) await _applyRemote(s.raw['rc'], asString(s.raw['rcv']) ?? '');
     unawaited(_syncDns(s.active)); // a ogni apertura, anche se la configurazione è la stessa di prima
     if (!_updaterStarted && s.active) {
@@ -1713,6 +1749,7 @@ class AppController {
     liveFormat.dispose();
     dnsBadge.dispose();
     favoritesRevision.dispose();
+    trendRevision.dispose();
     progressRevision.dispose();
     remoteCmd.dispose();
     _updater?.dispose();
